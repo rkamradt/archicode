@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from "react";
+import { useAuth0 } from '@auth0/auth0-react';
 
 // ── Color tokens ──────────────────────────────────────────────────────────────
 const C = {
@@ -581,6 +582,51 @@ function ExportPanel({ services, projectName }) {
 
 // ── Main App ──────────────────────────────────────────────────────────────────
 export default function ArchitectAI() {
+  const { isAuthenticated, isLoading, loginWithRedirect, logout, getAccessTokenSilently } = useAuth0();
+
+  const api = async (path, method = 'GET', body = null) => {
+    const token = await getAccessTokenSilently();
+    const baseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001';
+    const res = await fetch(`${baseUrl}${path}`, {
+      method,
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      ...(body ? { body: JSON.stringify(body) } : {}),
+    });
+    return res.json();
+  };
+
+  // ── User profile / API key ────────────────────────────────────────────────
+  const [profileChecked, setProfileChecked] = useState(false);
+  const [hasApiKey, setHasApiKey] = useState(false);
+  const [showKeyPanel, setShowKeyPanel] = useState(false);
+  const [apiKeyInput, setApiKeyInput] = useState('');
+  const [apiKeySaving, setApiKeySaving] = useState(false);
+  const [apiKeyError, setApiKeyError] = useState('');
+
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    api('/api/user/profile').then(data => {
+      setHasApiKey(!!data.hasApiKey);
+      setProfileChecked(true);
+    }).catch(() => setProfileChecked(true));
+  }, [isAuthenticated]);
+
+  async function saveApiKey() {
+    if (!apiKeyInput.trim()) return;
+    setApiKeySaving(true);
+    setApiKeyError('');
+    try {
+      const result = await api('/api/user/profile', 'PUT', { anthropicApiKey: apiKeyInput.trim() });
+      if (result.error) throw new Error(result.error);
+      setHasApiKey(true);
+      setApiKeyInput('');
+      setShowKeyPanel(false);
+    } catch (e) {
+      setApiKeyError(e.message);
+    }
+    setApiKeySaving(false);
+  }
+
   const [services, setServices] = useState([]);
   const [messages, setMessages] = useState([{
     role: 'assistant',
@@ -609,10 +655,9 @@ export default function ArchitectAI() {
   useEffect(() => {
     (async () => {
       try {
-        const sv = await window.storage.get('architect-services');
-        if (sv?.value) setServices(JSON.parse(sv.value));
-        const pn = await window.storage.get('architect-project');
-        if (pn?.value) setProjectName(pn.value);
+        const data = await api('/api/ecosystem');
+        if (data.services) setServices(data.services);
+        if (data.projectName) setProjectName(data.projectName);
       } catch {}
       setHydrated(true);
     })();
@@ -620,98 +665,182 @@ export default function ArchitectAI() {
 
   useEffect(() => {
     if (!hydrated) return;
-    window.storage.set('architect-services', JSON.stringify(services)).catch(() => {});
+    api('/api/ecosystem', 'PUT', { services, projectName }).catch(() => {});
   }, [services, hydrated]);
 
   useEffect(() => {
     if (!hydrated) return;
-    window.storage.set('architect-project', projectName).catch(() => {});
+    api('/api/ecosystem', 'PUT', { services, projectName }).catch(() => {});
   }, [projectName, hydrated]);
 
   // ── GitHub integration ────────────────────────────────────────────────────────
   const [ghConfig, setGhConfig] = useState({ token: '', owner: '', repo: '', branch: 'main', path: 'ecosystem.json' });
-  const [ghSha, setGhSha] = useState(null);
-  const [ghSpecSha, setGhSpecSha] = useState(null);
   const [ghStatus, setGhStatus] = useState(null); // null | 'pulling' | 'pushing' | 'ok' | 'error'
   const [ghMsg, setGhMsg] = useState('');
   const [showGhPanel, setShowGhPanel] = useState(false);
 
-  // Load gh config from storage on mount
+  // ── Implement ─────────────────────────────────────────────────────────────────
+  const [implRunning, setImplRunning] = useState(false);
+  const [implLog, setImplLog] = useState([]);
+  const [showImplPanel, setShowImplPanel] = useState(false);
+  const implLogEndRef = useRef(null);
+
   useEffect(() => {
-    window.storage.get('architect-gh').then(r => {
-      if (r?.value) { try { setGhConfig(JSON.parse(r.value)); } catch {} }
+    if (showImplPanel) implLogEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [implLog, showImplPanel]);
+
+  // Load gh config from backend on mount
+  useEffect(() => {
+    api('/api/github/config').then(cfg => {
+      if (cfg && !cfg.error) setGhConfig(prev => ({ ...prev, ...cfg }));
     }).catch(() => {});
   }, []);
 
+  if (isLoading) return (
+    <div style={{ color: '#64748b', padding: '40px', fontFamily: 'IBM Plex Mono' }}>Loading…</div>
+  );
+  if (!isAuthenticated) return (
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100vh', background: '#07101f', gap: '16px' }}>
+      <div style={{ color: '#3b82f6', fontFamily: 'IBM Plex Mono', fontSize: '24px', fontWeight: 700 }}>◈ ARCHITECTAI</div>
+      <button onClick={() => loginWithRedirect()} style={{ background: '#2563eb', color: '#fff', border: 'none', borderRadius: '8px', padding: '12px 28px', fontFamily: 'IBM Plex Mono', fontSize: '13px', fontWeight: 700, cursor: 'pointer' }}>
+        SIGN IN
+      </button>
+    </div>
+  );
+  if (!profileChecked) return (
+    <div style={{ color: '#64748b', padding: '40px', fontFamily: 'IBM Plex Mono' }}>Loading…</div>
+  );
+  if (!hasApiKey) return (
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100vh', background: C.bg, gap: '20px' }}>
+      <div style={{ color: C.accentBr, fontFamily: 'IBM Plex Mono', fontSize: '24px', fontWeight: 700 }}>◈ ARCHITECTAI</div>
+      <div style={{ color: C.muted, fontFamily: 'IBM Plex Mono', fontSize: '13px', textAlign: 'center', maxWidth: '360px', lineHeight: '1.6' }}>
+        To get started, enter your Anthropic API key.<br />
+        It will be stored securely and used only for your account.
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', width: '320px' }}>
+        <input
+          type="password"
+          placeholder="sk-ant-…"
+          value={apiKeyInput}
+          onChange={e => setApiKeyInput(e.target.value)}
+          onKeyDown={e => e.key === 'Enter' && saveApiKey()}
+          style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: '8px', color: C.text, fontFamily: 'IBM Plex Mono', fontSize: '13px', padding: '10px 14px', outline: 'none' }}
+        />
+        {apiKeyError && <div style={{ color: C.red, fontFamily: 'IBM Plex Mono', fontSize: '11px' }}>{apiKeyError}</div>}
+        <button onClick={saveApiKey} disabled={apiKeySaving || !apiKeyInput.trim()}
+          style={{ background: C.accent, color: '#fff', border: 'none', borderRadius: '8px', padding: '12px', fontFamily: 'IBM Plex Mono', fontSize: '13px', fontWeight: 700, cursor: apiKeySaving ? 'not-allowed' : 'pointer', opacity: apiKeyInput.trim() ? 1 : 0.5 }}>
+          {apiKeySaving ? 'SAVING…' : 'SAVE & CONTINUE'}
+        </button>
+        <button onClick={() => logout({ logoutParams: { returnTo: window.location.origin } })}
+          style={{ background: 'none', border: 'none', color: C.muted, fontFamily: 'IBM Plex Mono', fontSize: '11px', cursor: 'pointer', padding: '4px' }}>
+          sign out
+        </button>
+      </div>
+    </div>
+  );
+
   function saveGhConfig(cfg) {
     setGhConfig(cfg);
-    window.storage.set('architect-gh', JSON.stringify(cfg)).catch(() => {});
-  }
-
-  function ghHeaders(cfg) {
-    return { Authorization: `Bearer ${cfg.token}`, Accept: 'application/vnd.github.v3+json', 'Content-Type': 'application/json' };
+    api('/api/github/config', 'PUT', cfg).catch(() => {});
   }
 
   async function ghPull() {
-    const cfg = ghConfig;
-    if (!cfg.token || !cfg.owner || !cfg.repo) { setGhMsg('Configure GitHub settings first.'); setGhStatus('error'); return; }
     setGhStatus('pulling'); setGhMsg('');
     try {
-      const url = `https://api.github.com/repos/${cfg.owner}/${cfg.repo}/contents/${cfg.path}?ref=${cfg.branch}&t=${Date.now()}`;
-      const res = await fetch(url, { headers: ghHeaders(cfg) });
-      if (res.status === 404) {
+      const data = await api('/api/github/pull', 'POST');
+      if (data.error) throw new Error(data.error);
+      if (!data.content) {
         setGhMsg('ecosystem.json not found in repo — push will create it.');
-        setGhStatus('ok'); setGhSha(null); return;
+        setGhStatus('ok'); return;
       }
-      if (!res.ok) throw new Error(`GitHub ${res.status}`);
-      const data = await res.json();
-      setGhSha(data.sha);
       const text = decodeURIComponent(escape(atob(data.content.replace(/\n/g, ''))));
       const parsed = JSON.parse(text);
       if (parsed.services) {
         setServices(parsed.services);
         if (parsed.project) setProjectName(parsed.project);
       }
-      // Also fetch spec SHA if it exists
-      try {
-        const specPath = cfg.path.replace('ecosystem.json', 'spec.md');
-        const specRes = await fetch(`https://api.github.com/repos/${cfg.owner}/${cfg.repo}/contents/${specPath}?ref=${cfg.branch}&t=${Date.now()}`, { headers: ghHeaders(cfg) });
-        if (specRes.ok) { const sd = await specRes.json(); setGhSpecSha(sd.sha); }
-      } catch {}
-      setGhStatus('ok'); setGhMsg(`Pulled ${parsed.services?.length ?? 0} services from ${cfg.owner}/${cfg.repo}`);
+      setGhStatus('ok'); setGhMsg(`Pulled ${parsed.services?.length ?? 0} services from repo`);
     } catch (e) {
       setGhStatus('error'); setGhMsg(e.message);
     }
   }
 
-  async function ghPushFile(cfg, path, content, sha) {
-    const body = { message: `chore: update ${path.split('/').pop()} via ArchitectAI [${new Date().toISOString().slice(0,10)}]`, content: btoa(unescape(encodeURIComponent(content))), branch: cfg.branch };
-    if (sha) body.sha = sha;
-    const res = await fetch(`https://api.github.com/repos/${cfg.owner}/${cfg.repo}/contents/${path}`, { method: 'PUT', headers: ghHeaders(cfg), body: JSON.stringify(body) });
-    if (!res.ok) { const d = await res.json(); throw new Error(d.message || `GitHub ${res.status}`); }
-    const data = await res.json();
-    return data.content?.sha;
-  }
-
   async function ghPush() {
-    const cfg = ghConfig;
-    if (!cfg.token || !cfg.owner || !cfg.repo) { setGhMsg('Configure GitHub settings first.'); setGhStatus('error'); return; }
     setGhStatus('pushing'); setGhMsg('');
     try {
-      const specPath = cfg.path.replace('ecosystem.json', 'spec.md');
-      const [newEcoSha, newSpecSha] = await Promise.all([
-        ghPushFile(cfg, cfg.path, genEcosystemJson(services, projectName), ghSha),
-        ghPushFile(cfg, specPath, genSpecMd(services, projectName), ghSpecSha),
-      ]);
-      setGhSha(newEcoSha || ghSha);
-      setGhSpecSha(newSpecSha || ghSpecSha);
-      setGhStatus('ok'); setGhMsg(`Pushed ecosystem.json + spec.md to ${cfg.owner}/${cfg.repo} on ${cfg.branch}`);
+      const base = (ghConfig.path || 'ecosystem.json').replace(/ecosystem\.json$/, '');
+      const files = [
+        { path: `${base}ecosystem.json`, content: genEcosystemJson(services, projectName) },
+        { path: `${base}spec.md`,        content: genSpecMd(services, projectName) },
+        { path: `${base}CLAUDE.md`,      content: genSpineClaudeMd(services, projectName) },
+        ...services.map(s => ({ path: `${base}${s.id}/CLAUDE.md`, content: genServiceClaudeMd(s, projectName) })),
+      ];
+      const data = await api('/api/github/push', 'POST', { files });
+      if (data.error) throw new Error(data.error);
+      setGhStatus('ok');
+      setGhMsg(`Pushed ${data.results?.length ?? files.length} files to ${ghConfig.owner}/${ghConfig.repo}`);
     } catch (e) {
       setGhStatus('error'); setGhMsg(e.message);
     }
   }
 
   const ghConnected = !!(ghConfig.token && ghConfig.owner && ghConfig.repo);
+
+  function toRepoName(name) {
+    return name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') + '-services';
+  }
+
+  async function implement() {
+    if (!services.length || implRunning) return;
+    const repoName = toRepoName(projectName);
+    setImplRunning(true);
+    setImplLog([]);
+    setShowImplPanel(true);
+
+    try {
+      // Step 1: create the GitHub repo
+      const createRes = await api('/api/github/create-repo', 'POST', {
+        repoName,
+        description: `${projectName} — generated by ArchitectAI`,
+        private: false,
+      });
+      if (createRes.error) throw new Error(createRes.error);
+      setImplLog(prev => [...prev, { type: 'start', message: `Repo created: ${createRes.repoUrl}` }]);
+
+      // Step 2: stream the implementation via SSE (EventSource doesn't support POST)
+      const token = await getAccessTokenSilently();
+      const baseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001';
+      const res = await fetch(`${baseUrl}/api/implement`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ repoName }),
+      });
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const parts = buffer.split('\n\n');
+        buffer = parts.pop(); // hold incomplete chunk for next iteration
+        for (const part of parts) {
+          const line = part.trim();
+          if (!line.startsWith('data: ')) continue;
+          try {
+            const event = JSON.parse(line.slice(6));
+            setImplLog(prev => [...prev, event]);
+          } catch {}
+        }
+      }
+    } catch (e) {
+      setImplLog(prev => [...prev, { type: 'error', message: e.message }]);
+    }
+
+    setImplRunning(false);
+  }
 
   // Simple markdown renderer: **bold**, `code`, newlines
   function renderMd(text) {
@@ -745,18 +874,12 @@ export default function ArchitectAI() {
     }
 
     try {
-      const res = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: 'claude-sonnet-4-20250514',
-          max_tokens: 2048,
-          system: buildPrompt(services),
-          messages: apiHistory,
-        }),
+      const data = await api('/api/messages', 'POST', {
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 2048,
+        system: buildPrompt(services),
+        messages: apiHistory,
       });
-
-      const data = await res.json();
       if (data.error) throw new Error(data.error.message);
 
       const raw = data.content?.map(b => b.text || '').join('') || '';
@@ -844,22 +967,53 @@ export default function ArchitectAI() {
               style={{ background: 'none', border: `1px solid ${C.border}`, borderRadius: '4px', color: ghStatus === 'pushing' ? C.amber : C.green, cursor: 'pointer', fontSize: '11px', fontFamily: 'IBM Plex Mono', padding: '2px 9px' }}>
               {ghStatus === 'pushing' ? '…' : '↑ push'}
             </button>
+            <button onClick={implement} disabled={implRunning || !services.length}
+              title={`Scaffold ${toRepoName(projectName)} and push to GitHub`}
+              style={{ background: implRunning ? C.card : C.purple + '22', border: `1px solid ${implRunning || !services.length ? C.border : C.purple + '88'}`, borderRadius: '4px', color: implRunning ? C.muted : C.purple, cursor: implRunning || !services.length ? 'not-allowed' : 'pointer', fontSize: '11px', fontFamily: 'IBM Plex Mono', padding: '2px 9px', fontWeight: '700' }}>
+              {implRunning ? '⟳ building…' : '▶ implement'}
+            </button>
           </>}
+          <button title="Anthropic API key" onClick={() => { setShowKeyPanel(p => !p); setApiKeyInput(''); setApiKeyError(''); }}
+            style={{ background: showKeyPanel ? C.card : 'none', border: `1px solid ${showKeyPanel ? C.accentBr : C.border}`, borderRadius: '4px', color: C.accentBr, cursor: 'pointer', fontSize: '11px', fontFamily: 'IBM Plex Mono', padding: '2px 8px', lineHeight: 1 }}>
+            ⚿
+          </button>
           <button title="GitHub settings" onClick={() => setShowGhPanel(p => !p)}
             style={{ background: showGhPanel ? C.card : 'none', border: `1px solid ${showGhPanel ? C.accentBr : C.border}`, borderRadius: '4px', color: ghConnected ? C.accentBr : C.dim, cursor: 'pointer', fontSize: '13px', fontFamily: 'IBM Plex Mono', padding: '2px 8px', lineHeight: 1 }}>
             ⎔
           </button>
           <button title="Reset ecosystem" onClick={() => {
             if (window.confirm('Clear all services and start over?')) {
-              setServices([]); setSelected(null); setGhSha(null);
-              window.storage.set('architect-services', '[]').catch(() => {});
+              setServices([]); setSelected(null);
+              api('/api/ecosystem', 'PUT', { services: [], projectName }).catch(() => {});
             }
           }} style={{ background: 'none', border: `1px solid ${C.border}`, borderRadius: '4px', color: C.dim, cursor: 'pointer', fontSize: '11px', fontFamily: 'IBM Plex Mono', padding: '2px 8px' }}>
             ↺
           </button>
+          <button onClick={() => logout({ logoutParams: { returnTo: window.location.origin } })}
+            style={{ background: 'none', border: `1px solid ${C.border}`, borderRadius: '4px', color: C.dim, cursor: 'pointer', fontSize: '11px', fontFamily: 'IBM Plex Mono', padding: '2px 8px' }}>
+            sign out
+          </button>
           <div style={{ width: '6px', height: '6px', borderRadius: '50%', background: loading ? C.amber : C.green, transition: 'background .3s' }} title={loading ? 'Thinking...' : 'Ready'} />
         </div>
       </div>
+
+      {/* ── API key update panel ── */}
+      {showKeyPanel && (
+        <div style={{ background: C.card, borderBottom: `1px solid ${C.border}`, padding: '14px 16px', display: 'flex', gap: '10px', alignItems: 'flex-end', flexShrink: 0 }}>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+            <span style={{ color: C.dim, fontFamily: 'IBM Plex Mono', fontSize: '10px', fontWeight: '700', letterSpacing: '0.1em' }}>ANTHROPIC API KEY</span>
+            <input type="password" value={apiKeyInput} placeholder="sk-ant-… (leave blank to keep existing)"
+              onChange={e => setApiKeyInput(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && saveApiKey()}
+              style={{ width: '300px', background: C.surface, border: `1px solid ${C.border}`, borderRadius: '4px', color: C.text, fontFamily: 'IBM Plex Mono', fontSize: '12px', padding: '5px 9px', outline: 'none' }} />
+          </label>
+          {apiKeyError && <span style={{ color: C.red, fontFamily: 'IBM Plex Mono', fontSize: '11px', alignSelf: 'center' }}>{apiKeyError}</span>}
+          <button onClick={saveApiKey} disabled={apiKeySaving || !apiKeyInput.trim()}
+            style={{ background: C.accentBr, border: 'none', borderRadius: '4px', color: '#fff', cursor: apiKeyInput.trim() ? 'pointer' : 'not-allowed', fontFamily: 'IBM Plex Mono', fontSize: '11px', fontWeight: '700', padding: '7px 16px', alignSelf: 'flex-end', opacity: apiKeyInput.trim() ? 1 : 0.45 }}>
+            {apiKeySaving ? 'SAVING…' : 'UPDATE KEY'}
+          </button>
+        </div>
+      )}
 
       {/* ── GitHub settings panel ── */}
       {showGhPanel && (
@@ -891,6 +1045,78 @@ export default function ArchitectAI() {
         <div style={{ background: ghStatus === 'error' ? C.red + '18' : C.green + '14', borderBottom: `1px solid ${ghStatus === 'error' ? C.red + '44' : C.green + '44'}`, padding: '5px 16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0 }}>
           <span style={{ color: ghStatus === 'error' ? C.red : C.green, fontFamily: 'IBM Plex Mono', fontSize: '11px' }}>{ghMsg}</span>
           <button onClick={() => setGhMsg('')} style={{ background: 'none', border: 'none', color: C.muted, cursor: 'pointer', fontFamily: 'IBM Plex Mono', fontSize: '12px' }}>×</button>
+        </div>
+      )}
+
+      {/* ── Implement progress panel ── */}
+      {showImplPanel && (
+        <div style={{ background: C.bg, borderBottom: `1px solid ${C.border}`, flexShrink: 0, display: 'flex', flexDirection: 'column' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 16px', background: C.surface, borderBottom: `1px solid ${C.border}` }}>
+            <span style={{ color: C.dim, fontFamily: 'IBM Plex Mono', fontSize: '10px', fontWeight: '700', letterSpacing: '0.14em' }}>
+              IMPLEMENTATION LOG — {toRepoName(projectName)}
+            </span>
+            <button onClick={() => setShowImplPanel(false)}
+              style={{ background: 'none', border: 'none', color: C.muted, cursor: 'pointer', fontFamily: 'IBM Plex Mono', fontSize: '13px' }}>×</button>
+          </div>
+          <div style={{ maxHeight: '220px', overflow: 'auto', padding: '8px 16px', display: 'flex', flexDirection: 'column', gap: '3px' }}>
+            {implLog.map((entry, i) => {
+              if (entry.type === 'start') return (
+                <div key={i} style={{ color: C.accentBr, fontFamily: 'IBM Plex Mono', fontSize: '11px', fontWeight: '700', paddingTop: i > 0 ? '6px' : 0 }}>
+                  ◈ {entry.message}
+                </div>
+              );
+              if (entry.type === 'service') return (
+                <div key={i} style={{ color: C.purple, fontFamily: 'IBM Plex Mono', fontSize: '10px', fontWeight: '700', letterSpacing: '0.1em', paddingTop: '6px' }}>
+                  ── {entry.message} ──
+                </div>
+              );
+              if (entry.type === 'thinking') return (
+                <div key={i} style={{ color: C.dim, fontFamily: 'IBM Plex Mono', fontSize: '10px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <span style={{ display: 'inline-flex', gap: '2px' }}>
+                    <span className="dot" /><span className="dot" /><span className="dot" />
+                  </span>
+                  {entry.message}
+                </div>
+              );
+              if (entry.type === 'file') return (
+                <div key={i} style={{ color: C.muted, fontFamily: 'IBM Plex Mono', fontSize: '10px' }}>
+                  <span style={{ color: C.green }}>✎</span> {entry.path || entry.message}
+                </div>
+              );
+              if (entry.type === 'push') return (
+                <div key={i} style={{ color: C.amber, fontFamily: 'IBM Plex Mono', fontSize: '10px' }}>
+                  ↑ {entry.message}
+                </div>
+              );
+              if (entry.type === 'done') return (
+                <div key={i} style={{ color: C.green, fontFamily: 'IBM Plex Mono', fontSize: '11px', fontWeight: '700', paddingTop: '6px' }}>
+                  ✓ {entry.message}{' '}
+                  {entry.repoUrl && (
+                    <a href={entry.repoUrl} target="_blank" rel="noreferrer"
+                      style={{ color: C.accentBr, textDecoration: 'underline', fontWeight: '400' }}>
+                      {entry.repoUrl}
+                    </a>
+                  )}
+                  {entry.errors?.length > 0 && (
+                    <span style={{ color: C.amber, fontWeight: '400' }}> ({entry.errors.length} push errors)</span>
+                  )}
+                </div>
+              );
+              if (entry.type === 'error') return (
+                <div key={i} style={{ color: C.red, fontFamily: 'IBM Plex Mono', fontSize: '11px' }}>
+                  ✗ {entry.message}
+                </div>
+              );
+              return null;
+            })}
+            {implRunning && implLog.length === 0 && (
+              <div style={{ color: C.dim, fontFamily: 'IBM Plex Mono', fontSize: '10px', display: 'flex', gap: '6px', alignItems: 'center' }}>
+                <span style={{ display: 'inline-flex', gap: '2px' }}><span className="dot" /><span className="dot" /><span className="dot" /></span>
+                Starting…
+              </div>
+            )}
+            <div ref={implLogEndRef} />
+          </div>
         </div>
       )}
 

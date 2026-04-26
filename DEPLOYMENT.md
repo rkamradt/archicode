@@ -72,7 +72,6 @@ The identifier is what goes in `AUTH0_AUDIENCE` and `VITE_AUTH0_AUDIENCE`.
 # Backend secrets
 kubectl create secret generic architectai-api-secrets \
   --namespace=rkamradt-platform \
-  --from-literal=ANTHROPIC_API_KEY=sk-ant-... \
   --from-literal=MONGODB_URI=mongodb://architectai:PASSWORD@mongodb.rkamradt-platform:27017/architectai \
   --from-literal=AUTH0_ISSUER_BASE_URL=https://YOUR_TENANT.auth0.com/ \
   --from-literal=AUTH0_AUDIENCE=https://api.architect.kamradtfamily.net \
@@ -326,16 +325,18 @@ All routes (except /health) require Auth0 JWT via express-oauth2-jwt-bearer.
 Audience: https://api.architect.kamradtfamily.net
 
 ## Environment variables (from K8s secret architectai-api-secrets)
-- ANTHROPIC_API_KEY
 - MONGODB_URI
 - AUTH0_ISSUER_BASE_URL
 - AUTH0_AUDIENCE
 - FRONTEND_URL
+
+Note: ANTHROPIC_API_KEY is no longer a server env var — each user stores their own
+key in MongoDB via the onboarding flow. The /api/user/profile endpoints manage it.
 
 ## Build & deploy
 push to main → GitHub Actions builds → pushes ghcr.io/rkamradt/architectai-api:main
 → ArgoCD detects new tag → redeploys in rkamradt-platform namespace
 
 ## Local dev
-ANTHROPIC_API_KEY=... MONGODB_URI=... AUTH0_ISSUER_BASE_URL=... AUTH0_AUDIENCE=... npm run dev
+MONGODB_URI=... AUTH0_ISSUER_BASE_URL=... AUTH0_AUDIENCE=... npm run dev
 ```
