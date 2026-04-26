@@ -1,0 +1,1034 @@
+import { useState, useRef, useEffect } from "react";
+
+// ── Color tokens ──────────────────────────────────────────────────────────────
+const C = {
+  bg:         '#07101f',
+  surface:    '#0d1928',
+  card:       '#111f35',
+  border:     '#1b3252',
+  accent:     '#2563eb',
+  accentBr:   '#3b82f6',
+  accentGlow: '#60a5fa',
+  amber:      '#f59e0b',
+  green:      '#10b981',
+  red:        '#ef4444',
+  purple:     '#a78bfa',
+  text:       '#e2e8f0',
+  muted:      '#64748b',
+  dim:        '#2d4a6a',
+};
+
+const TECH_COLORS = {
+  spring: '#6db33f', java: '#6db33f',
+  node: '#68a063', express: '#68a063',
+  python: '#3572a5', django: '#3572a5', fastapi: '#3572a5',
+  go: '#00acd7', golang: '#00acd7',
+  rust: '#dea584',
+  kafka: '#e3932a',
+  react: '#61dafb', typescript: '#3178c6',
+  redis: '#ff4438', postgres: '#336791', mysql: '#4479a1',
+  grpc: '#00bcd4',
+};
+
+function techColor(tech = '') {
+  const lo = tech.toLowerCase();
+  for (const [k, v] of Object.entries(TECH_COLORS)) if (lo.includes(k)) return v;
+  return C.accentBr;
+}
+
+// ── Ecosystem update parsing ──────────────────────────────────────────────────
+function parseUpdates(text) {
+  const out = [];
+  const re = /<ecosystem_update>([\s\S]*?)<\/ecosystem_update>/g;
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    try { out.push(JSON.parse(m[1].trim())); } catch {}
+  }
+  return out;
+}
+
+function stripTags(text) {
+  return text.replace(/<ecosystem_update>[\s\S]*?<\/ecosystem_update>/g, '').trim();
+}
+
+// ── System prompt ─────────────────────────────────────────────────────────────
+function buildPrompt(services) {
+  return `You are ArchitectAI — a senior software architect specializing in microservices, event-driven systems, and distributed architecture.
+
+Your expertise includes: service decomposition and bounded contexts (DDD), REST/gRPC/GraphQL API design, event-driven patterns (Kafka, CQRS, event sourcing, Saga), resilience patterns (circuit breaker, bulkhead, retry with backoff), service mesh, distributed tracing, data ownership and consistency boundaries, Kubernetes, AWS, and GitOps/ArgoCD deployment.
+
+Current ecosystem state:
+${services.length === 0
+  ? '(empty — no services defined yet)'
+  : JSON.stringify(services, null, 2)}
+
+When the user has agreed to add or update a service, emit EXACTLY this JSON block — no prose inside the tags:
+<ecosystem_update>
+{"action":"add","service":{"id":"kebab-case-id","name":"ServiceName","purpose":"One sentence: what this service owns and is responsible for","tech":"Spring Boot","apis":[{"method":"POST","path":"/path","description":"what this endpoint does"}],"events":[{"direction":"produces","topic":"domain.event.name","description":"what payload this carries"}],"dependencies":["other-service-id"]}}
+</ecosystem_update>
+
+Emit ecosystem_update ONLY when formalizing agreed services — not speculatively during discussion.
+Use "action": "add", "update", or "remove" as appropriate.
+
+Architectural principles to uphold:
+- Single responsibility: each service owns one bounded context
+- No shared databases between services
+- Flag circular dependencies, chatty inter-service calls, data ownership violations
+- Prefer async event-driven communication for cross-domain concerns
+- Recommend specific patterns, not "it depends" hedging
+- Call out when a proposed service is too broad or could be split`;
+}
+
+// ── Topology SVG ──────────────────────────────────────────────────────────────
+function Topology({ services, onSelect }) {
+  if (!services.length) {
+    return (
+      <div style={{ height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '12px', color: C.dim, fontFamily: 'IBM Plex Mono, monospace' }}>
+        <div style={{ fontSize: '48px', opacity: 0.2 }}>◈</div>
+        <div style={{ fontSize: '12px' }}>No services yet — architect in the chat</div>
+      </div>
+    );
+  }
+
+  const W = 720, H = 500;
+  const cx = W / 2, cy = H / 2;
+  const R = Math.min(W, H) * 0.33;
+  const NODE_R = 32;
+
+  const positions = services.map((s, i) => {
+    const angle = (2 * Math.PI * i / services.length) - Math.PI / 2;
+    return { id: s.id, x: cx + R * Math.cos(angle), y: cy + R * Math.sin(angle) };
+  });
+  const posMap = Object.fromEntries(positions.map(p => [p.id, p]));
+
+  const edges = [];
+  services.forEach(s => {
+    (s.dependencies || []).forEach(dep => {
+      const from = posMap[s.id], to = posMap[dep];
+      if (from && to) edges.push({ from, to, key: `${s.id}→${dep}` });
+    });
+  });
+
+  function edgePath({ from, to }) {
+    const dx = to.x - from.x, dy = to.y - from.y;
+    const d = Math.sqrt(dx * dx + dy * dy);
+    const nx = dx / d, ny = dy / d;
+    const x1 = from.x + nx * NODE_R, y1 = from.y + ny * NODE_R;
+    const x2 = to.x - nx * (NODE_R + 10), y2 = to.y - ny * (NODE_R + 10);
+    const mx = (x1 + x2) / 2 - ny * 25, my = (y1 + y2) / 2 + nx * 25;
+    return `M ${x1} ${y1} Q ${mx} ${my} ${x2} ${y2}`;
+  }
+
+  return (
+    <svg width="100%" height="100%" viewBox={`0 0 ${W} ${H}`}>
+      <defs>
+        <marker id="tip" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+          <path d="M0,0 L0,6 L8,3 z" fill={C.accentBr} opacity="0.75" />
+        </marker>
+      </defs>
+
+      {/* Blueprint grid */}
+      {Array.from({ length: 22 }, (_, i) => (
+        <line key={`h${i}`} x1="0" y1={i * 24} x2={W} y2={i * 24}
+          stroke={C.border} strokeWidth="0.3" opacity="0.35" />
+      ))}
+      {Array.from({ length: 32 }, (_, i) => (
+        <line key={`v${i}`} x1={i * 24} y1="0" x2={i * 24} y2={H}
+          stroke={C.border} strokeWidth="0.3" opacity="0.35" />
+      ))}
+
+      {/* Edges */}
+      {edges.map(e => (
+        <path key={e.key} d={edgePath(e)} fill="none"
+          stroke={C.accentBr} strokeWidth="1.2" opacity="0.45"
+          strokeDasharray="5 3" markerEnd="url(#tip)" />
+      ))}
+
+      {/* Nodes */}
+      {services.map(s => {
+        const p = posMap[s.id];
+        if (!p) return null;
+        const col = techColor(s.tech);
+        const label = s.name.length > 12 ? s.name.slice(0, 11) + '…' : s.name;
+        const techLabel = (s.tech || '').split(' ')[0].slice(0, 10);
+        return (
+          <g key={s.id} style={{ cursor: 'pointer' }} onClick={() => onSelect(s)}>
+            <circle cx={p.x} cy={p.y} r={NODE_R + 6} fill="none" stroke={col} strokeWidth="0.5" opacity="0.15" />
+            <circle cx={p.x} cy={p.y} r={NODE_R} fill={C.card} stroke={col} strokeWidth="1.5" />
+            <text x={p.x} y={p.y - 3} textAnchor="middle" dominantBaseline="central"
+              fill={C.text} fontSize="10" fontWeight="600"
+              style={{ fontFamily: 'IBM Plex Mono, monospace' }}>
+              {label}
+            </text>
+            {techLabel && (
+              <text x={p.x} y={p.y + 12} textAnchor="middle" dominantBaseline="central"
+                fill={col} fontSize="8" opacity="0.85"
+                style={{ fontFamily: 'IBM Plex Mono, monospace' }}>
+                {techLabel}
+              </text>
+            )}
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
+// ── Service detail panel ──────────────────────────────────────────────────────
+function DetailPanel({ service, onClose }) {
+  if (!service) return null;
+  const col = techColor(service.tech);
+
+  const Block = ({ label, children }) => (
+    <div style={{ marginBottom: '18px' }}>
+      <div style={{ color: C.dim, fontSize: '10px', fontWeight: '700', letterSpacing: '0.15em', fontFamily: 'IBM Plex Mono', marginBottom: '8px' }}>
+        {label}
+      </div>
+      {children}
+    </div>
+  );
+
+  return (
+    <div style={{
+      position: 'absolute', right: 0, top: 0, bottom: 0, width: '310px',
+      background: C.surface, borderLeft: `1px solid ${C.border}`,
+      overflow: 'auto', zIndex: 20,
+    }}>
+      <div style={{ padding: '18px 18px 24px' }}>
+        {/* Header */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '14px' }}>
+          <div>
+            <div style={{ color: col, fontFamily: 'IBM Plex Mono', fontSize: '10px', fontWeight: '700', letterSpacing: '0.14em', marginBottom: '4px' }}>
+              {service.tech || 'SERVICE'}
+            </div>
+            <div style={{ color: C.text, fontSize: '17px', fontWeight: '700' }}>{service.name}</div>
+          </div>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', color: C.muted, cursor: 'pointer', fontSize: '20px', lineHeight: 1 }}>×</button>
+        </div>
+
+        <p style={{ color: C.muted, fontSize: '13px', lineHeight: '1.65', marginBottom: '18px', paddingBottom: '16px', borderBottom: `1px solid ${C.border}` }}>
+          {service.purpose}
+        </p>
+
+        {/* APIs */}
+        {service.apis?.length > 0 && (
+          <Block label="API SURFACE">
+            {service.apis.map((a, i) => (
+              <div key={i} style={{ background: C.card, borderRadius: '5px', padding: '8px 10px', marginBottom: '5px', display: 'flex', gap: '8px' }}>
+                <span style={{ color: C.amber, fontFamily: 'IBM Plex Mono', fontSize: '10px', fontWeight: '700', minWidth: '44px', paddingTop: '1px' }}>{a.method}</span>
+                <div>
+                  <div style={{ color: C.text, fontFamily: 'IBM Plex Mono', fontSize: '11px', marginBottom: '2px' }}>{a.path}</div>
+                  <div style={{ color: C.muted, fontSize: '11px' }}>{a.description}</div>
+                </div>
+              </div>
+            ))}
+          </Block>
+        )}
+
+        {/* Events */}
+        {service.events?.length > 0 && (
+          <Block label="EVENT STREAMS">
+            {service.events.map((e, i) => (
+              <div key={i} style={{ background: C.card, borderRadius: '5px', padding: '8px 10px', marginBottom: '5px' }}>
+                <span style={{ color: e.direction === 'produces' ? C.green : C.accentBr, fontFamily: 'IBM Plex Mono', fontSize: '10px', fontWeight: '700' }}>
+                  {e.direction === 'produces' ? '▶ PRODUCES' : '◀ CONSUMES'}
+                </span>
+                <div style={{ color: C.text, fontFamily: 'IBM Plex Mono', fontSize: '11px', marginTop: '4px' }}>{e.topic}</div>
+                <div style={{ color: C.muted, fontSize: '11px', marginTop: '2px' }}>{e.description}</div>
+              </div>
+            ))}
+          </Block>
+        )}
+
+        {/* Dependencies */}
+        {service.dependencies?.length > 0 && (
+          <Block label="DEPENDS ON">
+            {service.dependencies.map((dep, i) => (
+              <div key={i} style={{ color: C.muted, fontFamily: 'IBM Plex Mono', fontSize: '12px', padding: '6px 0', borderBottom: `1px solid ${C.border}`, display: 'flex', gap: '6px' }}>
+                <span style={{ color: C.accentBr }}>→</span> {dep}
+              </div>
+            ))}
+          </Block>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── Export generators ─────────────────────────────────────────────────────────
+function genEcosystemJson(services, projectName) {
+  return JSON.stringify({ project: projectName, generated: new Date().toISOString(), services }, null, 2);
+}
+
+
+function genSpecMd(services, projectName) {
+  const date = new Date().toISOString().slice(0, 10);
+  const hash = btoa(JSON.stringify(services)).slice(0, 12);
+
+  const serviceBlocks = services.map(s => {
+    const apiTable = s.apis?.length
+      ? `| Method | Path | Description |\n|--------|------|-------------|\n` +
+        s.apis.map(a => `| \`${a.method}\` | \`${a.path}\` | ${a.description} |`).join('\n')
+      : '_No API endpoints defined._';
+
+    const eventTable = s.events?.length
+      ? `| Direction | Topic | Description |\n|-----------|-------|-------------|\n` +
+        s.events.map(e => `| ${e.direction === 'produces' ? '**Produces**' : '**Consumes**'} | \`${e.topic}\` | ${e.description} |`).join('\n')
+      : '_No event contracts defined._';
+
+    const depTable = s.dependencies?.length
+      ? `| Service | \n|---------|\n` + s.dependencies.map(d => `| \`${d}\` |`).join('\n')
+      : '_No dependencies._';
+
+    return `<!-- service-start: ${s.id} -->
+## Service: ${s.name}
+
+**ID:** \`${s.id}\`
+**Tech:** ${s.tech || 'TBD'}
+**Purpose:** ${s.purpose}
+
+### API Surface
+
+${apiTable}
+
+### Event Contracts
+
+${eventTable}
+
+### Service Dependencies
+
+${depTable}
+
+### Data Ownership
+
+This service is the sole owner of its data store. No other service may read or write its database directly.
+
+### Implementation Notes
+
+_Add service-specific constraints, patterns, and architectural decisions here._
+
+<!-- service-end: ${s.id} -->`;
+  }).join('\n\n---\n\n');
+
+  return `# ${projectName} — System Specification
+<!-- spec-version: 1.0.0 -->
+<!-- generated: ${date} -->
+<!-- ecosystem-hash: ${hash} -->
+<!-- DO NOT remove the HTML comment markers — they are machine-readable section delimiters -->
+
+## System Overview
+
+**${projectName}** is a platform consisting of ${services.length} microservice${services.length !== 1 ? 's' : ''}.
+
+> _Edit this section to describe the system's overall purpose, the domain it operates in,
+> and the key business capabilities it provides._
+
+### Services at a glance
+
+${services.map(s => `- **${s.name}** (\`${s.id}\`) — ${s.purpose}`).join('\n') || '_No services defined yet._'}
+
+### Architecture principles
+
+- Each service owns exactly one bounded context — no shared databases
+- Cross-domain communication via Kafka events; same-domain via direct REST/gRPC
+- API contracts are the only stable public interface of a service
+- Prefer async event-driven patterns for cross-domain side effects
+
+---
+
+${serviceBlocks}
+
+---
+
+## Changelog
+
+| Date | Change | Author |
+|------|--------|--------|
+| ${date} | Initial specification generated by ArchitectAI | ArchitectAI |
+
+---
+
+## AI Operation Protocol
+
+This document is the authoritative specification. Three AI operations are defined:
+
+### 1. Forward — Implement from spec
+\`\`\`
+claude "Read spec.md. For each service section, scaffold or implement the service
+according to its API surface, event contracts, and dependencies. Do not deviate
+from the contracts defined here."
+\`\`\`
+
+### 2. Reverse — Reconstruct spec from code
+\`\`\`
+claude "Examine this codebase. Identify all services, their REST/gRPC endpoints,
+Kafka producers and consumers, and inter-service dependencies. Produce a
+spec.md in the standard format (service-start/service-end markers, API table,
+event table, dependency table). Preserve any existing Implementation Notes."
+\`\`\`
+
+### 3. Delta — Implement spec changes
+\`\`\`bash
+# Get the diff of what changed in the spec
+git diff HEAD~1 -- spec.md > spec.diff
+
+# Tell Claude Code to implement the delta
+claude "Read spec.diff. For each changed service section, determine what code
+changes are required (new endpoints, changed event schemas, new dependencies,
+removed operations) and implement only those changes. Do not touch code for
+unchanged services."
+\`\`\`
+`;
+}
+
+function genSpineClaudeMd(services, projectName) {
+  const svcList = services.map(s => `- **${s.name}** (\`${s.id}\`) — ${s.purpose}`).join('\n');
+  return `# ${projectName} — Platform Architecture Context
+
+## Authoritative files
+- @spec.md — human-readable living specification (source of truth for all AI operations)
+- @ecosystem.json — machine-readable service registry (APIs, event contracts, dependencies)
+
+## Services in this platform
+${svcList || '(none yet)'}
+
+## Architecture principles
+- Each service owns exactly one bounded context — no shared databases
+- Cross-domain communication via Kafka events; same-domain via direct API calls
+- spec.md is the contract — code must match spec, not the other way around
+
+## Three AI operations (see spec.md §AI Operation Protocol for full prompts)
+
+### Forward — scaffold/implement a service
+Read @spec.md, find the service section by its ID, implement exactly what is declared.
+
+### Reverse — reconstruct spec from existing code
+Walk the codebase, identify endpoints/events/dependencies, write them back into @spec.md
+in the standard format. Preserve Implementation Notes already present.
+
+### Delta — implement spec changes
+\`\`\`bash
+git diff HEAD~1 -- spec.md > spec.diff
+claude "Read spec.diff, implement only the changed service sections."
+\`\`\`
+
+## Adding a new service
+1. Architect it in ArchitectAI → push updated spec.md + ecosystem.json
+2. In the service repo: \`claude "Scaffold this service per @../rkamradt-platform/spec.md#${'{service-id}'}\`
+3. Place the generated service CLAUDE.md at the repo root
+`;
+}
+
+function genServiceClaudeMd(svc, projectName) {
+  const apis = svc.apis?.map(a =>
+    `- \`${a.method} ${a.path}\` — ${a.description}`
+  ).join('\n') || '(none)';
+
+  const events = svc.events?.map(e =>
+    `- ${e.direction === 'produces' ? '▶ Produces' : '◀ Consumes'} \`${e.topic}\` — ${e.description}`
+  ).join('\n') || '(none)';
+
+  const deps = svc.dependencies?.length
+    ? svc.dependencies.map(d => `- \`${d}\``).join('\n')
+    : '(none)';
+
+  return `# ${svc.name}
+Part of the **${projectName}** ecosystem.
+
+## This service owns
+${svc.purpose}
+
+## Tech stack
+${svc.tech || 'TBD'}
+
+## API contracts — implement exactly as specified
+${apis}
+
+## Event contracts — implement exactly as specified
+${events}
+
+## Service dependencies
+${deps}
+
+## Platform context
+See @../rkamradt-platform/ecosystem.json for the full ecosystem registry.
+See @../rkamradt-platform/CLAUDE.md for platform-wide architecture rules.
+
+## Build & run
+\`\`\`bash
+mvn spring-boot:run
+mvn test
+\`\`\`
+
+## Implementation notes
+- Do not share a database with any other service
+- All inter-service calls must go through the declared API or event contracts above
+- Prefer async (Kafka) for cross-domain side effects; use sync API calls only for same-domain queries
+`;
+}
+
+// ── Export panel ──────────────────────────────────────────────────────────────
+function ExportPanel({ services, projectName }) {
+  const [tab, setTab] = useState('spec');
+  const [selId, setSelId] = useState(services[0]?.id || null);
+  const [copied, setCopied] = useState(null);
+
+  const selSvc = services.find(s => s.id === selId);
+
+  const files = {
+    spec:      { name: 'rkamradt-platform/spec.md',       content: genSpecMd(services, projectName) },
+    spine:     { name: 'rkamradt-platform/CLAUDE.md',     content: genSpineClaudeMd(services, projectName) },
+    ecosystem: { name: 'rkamradt-platform/ecosystem.json', content: genEcosystemJson(services, projectName) },
+    service:   selSvc ? { name: `${selId}/CLAUDE.md`, content: genServiceClaudeMd(selSvc, projectName) } : null,
+  };
+
+  const cur = files[tab];
+
+  function copy(content, key) {
+    navigator.clipboard.writeText(content).then(() => {
+      setCopied(key);
+      setTimeout(() => setCopied(null), 1800);
+    });
+  }
+
+  if (!services.length) {
+    return (
+      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: '12px', color: C.dim, fontFamily: 'IBM Plex Mono', fontSize: '12px' }}>
+        <div style={{ fontSize: '36px', opacity: 0.2 }}>⬡</div>
+        <div>No services to export yet</div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+      {/* Sub-tabs */}
+      <div style={{ display: 'flex', gap: '4px', padding: '12px 16px 0', background: C.surface, borderBottom: `1px solid ${C.border}`, flexShrink: 0 }}>
+        {[
+          { key: 'spec',      label: 'spec.md ★' },
+          { key: 'spine',     label: 'Spine CLAUDE.md' },
+          { key: 'ecosystem', label: 'ecosystem.json' },
+          { key: 'service',   label: 'Service CLAUDE.md' },
+        ].map(({ key, label }) => (
+          <button key={key} onClick={() => setTab(key)} style={{
+            background: tab === key ? C.card : 'none', border: `1px solid ${tab === key ? C.border : 'transparent'}`,
+            borderBottom: tab === key ? `1px solid ${C.card}` : `1px solid ${C.border}`,
+            marginBottom: '-1px', padding: '6px 14px', borderRadius: '6px 6px 0 0',
+            cursor: 'pointer', fontFamily: 'IBM Plex Mono', fontSize: '11px', fontWeight: '700',
+            color: tab === key ? C.accentBr : C.muted, letterSpacing: '0.06em',
+          }}>{label}</button>
+        ))}
+      </div>
+
+      {/* File header */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 16px', background: C.card, borderBottom: `1px solid ${C.border}`, flexShrink: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <span style={{ color: C.dim, fontFamily: 'IBM Plex Mono', fontSize: '11px' }}>📄</span>
+          <span style={{ color: C.muted, fontFamily: 'IBM Plex Mono', fontSize: '11px' }}>{cur?.name}</span>
+        </div>
+        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+          {tab === 'service' && services.length > 1 && (
+            <select value={selId || ''} onChange={e => setSelId(e.target.value)}
+              style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: '4px', color: C.text, fontFamily: 'IBM Plex Mono', fontSize: '11px', padding: '3px 8px' }}>
+              {services.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+            </select>
+          )}
+          {cur && (
+            <button onClick={() => copy(cur.content, tab)} style={{
+              background: copied === tab ? C.green + '22' : C.surface,
+              border: `1px solid ${copied === tab ? C.green + '55' : C.border}`,
+              borderRadius: '4px', padding: '4px 12px', cursor: 'pointer',
+              fontFamily: 'IBM Plex Mono', fontSize: '11px', fontWeight: '700',
+              color: copied === tab ? C.green : C.muted, transition: 'all 0.15s',
+            }}>
+              {copied === tab ? '✓ COPIED' : 'COPY'}
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* File content */}
+      <div style={{ flex: 1, overflow: 'auto', padding: '16px' }}>
+        {cur ? (
+          <pre style={{ fontFamily: 'IBM Plex Mono, monospace', fontSize: '12px', lineHeight: '1.7', color: C.text, whiteSpace: 'pre-wrap', wordBreak: 'break-word', margin: 0 }}>
+            {cur.content}
+          </pre>
+        ) : (
+          <div style={{ color: C.dim, fontFamily: 'IBM Plex Mono', fontSize: '12px' }}>Select a service above.</div>
+        )}
+      </div>
+
+      {/* Usage guide */}
+      <div style={{ borderTop: `1px solid ${C.border}`, padding: '14px 16px', background: C.surface, flexShrink: 0 }}>
+        <div style={{ color: C.dim, fontFamily: 'IBM Plex Mono', fontSize: '10px', fontWeight: '700', letterSpacing: '0.14em', marginBottom: '10px' }}>DROP PATTERN → CLAUDE CODE WORKFLOW</div>
+        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+          {[
+            ['1', `Place ecosystem.json in rkamradt-platform/`],
+            ['2', `Place spine CLAUDE.md in rkamradt-platform/`],
+            ['3', `cd <service-repo> && place service CLAUDE.md`],
+            ['4', `claude → "Scaffold this service per CLAUDE.md"`],
+          ].map(([n, label]) => (
+            <div key={n} style={{ display: 'flex', gap: '7px', alignItems: 'flex-start', background: C.card, borderRadius: '5px', padding: '7px 10px', flex: '1 1 45%', minWidth: '200px' }}>
+              <span style={{ color: C.accentBr, fontFamily: 'IBM Plex Mono', fontWeight: '700', fontSize: '11px', minWidth: '14px' }}>{n}</span>
+              <span style={{ color: C.muted, fontFamily: 'IBM Plex Mono', fontSize: '11px', lineHeight: '1.5' }}>{label}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Main App ──────────────────────────────────────────────────────────────────
+export default function ArchitectAI() {
+  const [services, setServices] = useState([]);
+  const [messages, setMessages] = useState([{
+    role: 'assistant',
+    content: "Welcome to **ArchitectAI**.\n\nI help you design and evolve ecosystems of services — decomposing domains, defining service boundaries and APIs, mapping event contracts, and reasoning about how things should communicate.\n\nDescribe what you're building: a new system from scratch, an existing ecosystem you want to expand, or a specific architectural problem. What's the domain?",
+  }]);
+  const [input, setInput] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [view, setView] = useState('chat');
+  const [selected, setSelected] = useState(null);
+  const [projectName, setProjectName] = useState('New Ecosystem');
+  const [editingName, setEditingName] = useState(false);
+  const chatEndRef = useRef(null);
+  const nameRef = useRef(null);
+
+  useEffect(() => {
+    if (view === 'chat') chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages, loading, view]);
+
+  useEffect(() => {
+    if (editingName) { nameRef.current?.focus(); nameRef.current?.select(); }
+  }, [editingName]);
+
+  // ── Persist & hydrate ────────────────────────────────────────────────────────
+  const [hydrated, setHydrated] = useState(false);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const sv = await window.storage.get('architect-services');
+        if (sv?.value) setServices(JSON.parse(sv.value));
+        const pn = await window.storage.get('architect-project');
+        if (pn?.value) setProjectName(pn.value);
+      } catch {}
+      setHydrated(true);
+    })();
+  }, []);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    window.storage.set('architect-services', JSON.stringify(services)).catch(() => {});
+  }, [services, hydrated]);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    window.storage.set('architect-project', projectName).catch(() => {});
+  }, [projectName, hydrated]);
+
+  // ── GitHub integration ────────────────────────────────────────────────────────
+  const [ghConfig, setGhConfig] = useState({ token: '', owner: '', repo: '', branch: 'main', path: 'ecosystem.json' });
+  const [ghSha, setGhSha] = useState(null);
+  const [ghSpecSha, setGhSpecSha] = useState(null);
+  const [ghStatus, setGhStatus] = useState(null); // null | 'pulling' | 'pushing' | 'ok' | 'error'
+  const [ghMsg, setGhMsg] = useState('');
+  const [showGhPanel, setShowGhPanel] = useState(false);
+
+  // Load gh config from storage on mount
+  useEffect(() => {
+    window.storage.get('architect-gh').then(r => {
+      if (r?.value) { try { setGhConfig(JSON.parse(r.value)); } catch {} }
+    }).catch(() => {});
+  }, []);
+
+  function saveGhConfig(cfg) {
+    setGhConfig(cfg);
+    window.storage.set('architect-gh', JSON.stringify(cfg)).catch(() => {});
+  }
+
+  function ghHeaders(cfg) {
+    return { Authorization: `Bearer ${cfg.token}`, Accept: 'application/vnd.github.v3+json', 'Content-Type': 'application/json' };
+  }
+
+  async function ghPull() {
+    const cfg = ghConfig;
+    if (!cfg.token || !cfg.owner || !cfg.repo) { setGhMsg('Configure GitHub settings first.'); setGhStatus('error'); return; }
+    setGhStatus('pulling'); setGhMsg('');
+    try {
+      const url = `https://api.github.com/repos/${cfg.owner}/${cfg.repo}/contents/${cfg.path}?ref=${cfg.branch}&t=${Date.now()}`;
+      const res = await fetch(url, { headers: ghHeaders(cfg) });
+      if (res.status === 404) {
+        setGhMsg('ecosystem.json not found in repo — push will create it.');
+        setGhStatus('ok'); setGhSha(null); return;
+      }
+      if (!res.ok) throw new Error(`GitHub ${res.status}`);
+      const data = await res.json();
+      setGhSha(data.sha);
+      const text = decodeURIComponent(escape(atob(data.content.replace(/\n/g, ''))));
+      const parsed = JSON.parse(text);
+      if (parsed.services) {
+        setServices(parsed.services);
+        if (parsed.project) setProjectName(parsed.project);
+      }
+      // Also fetch spec SHA if it exists
+      try {
+        const specPath = cfg.path.replace('ecosystem.json', 'spec.md');
+        const specRes = await fetch(`https://api.github.com/repos/${cfg.owner}/${cfg.repo}/contents/${specPath}?ref=${cfg.branch}&t=${Date.now()}`, { headers: ghHeaders(cfg) });
+        if (specRes.ok) { const sd = await specRes.json(); setGhSpecSha(sd.sha); }
+      } catch {}
+      setGhStatus('ok'); setGhMsg(`Pulled ${parsed.services?.length ?? 0} services from ${cfg.owner}/${cfg.repo}`);
+    } catch (e) {
+      setGhStatus('error'); setGhMsg(e.message);
+    }
+  }
+
+  async function ghPushFile(cfg, path, content, sha) {
+    const body = { message: `chore: update ${path.split('/').pop()} via ArchitectAI [${new Date().toISOString().slice(0,10)}]`, content: btoa(unescape(encodeURIComponent(content))), branch: cfg.branch };
+    if (sha) body.sha = sha;
+    const res = await fetch(`https://api.github.com/repos/${cfg.owner}/${cfg.repo}/contents/${path}`, { method: 'PUT', headers: ghHeaders(cfg), body: JSON.stringify(body) });
+    if (!res.ok) { const d = await res.json(); throw new Error(d.message || `GitHub ${res.status}`); }
+    const data = await res.json();
+    return data.content?.sha;
+  }
+
+  async function ghPush() {
+    const cfg = ghConfig;
+    if (!cfg.token || !cfg.owner || !cfg.repo) { setGhMsg('Configure GitHub settings first.'); setGhStatus('error'); return; }
+    setGhStatus('pushing'); setGhMsg('');
+    try {
+      const specPath = cfg.path.replace('ecosystem.json', 'spec.md');
+      const [newEcoSha, newSpecSha] = await Promise.all([
+        ghPushFile(cfg, cfg.path, genEcosystemJson(services, projectName), ghSha),
+        ghPushFile(cfg, specPath, genSpecMd(services, projectName), ghSpecSha),
+      ]);
+      setGhSha(newEcoSha || ghSha);
+      setGhSpecSha(newSpecSha || ghSpecSha);
+      setGhStatus('ok'); setGhMsg(`Pushed ecosystem.json + spec.md to ${cfg.owner}/${cfg.repo} on ${cfg.branch}`);
+    } catch (e) {
+      setGhStatus('error'); setGhMsg(e.message);
+    }
+  }
+
+  const ghConnected = !!(ghConfig.token && ghConfig.owner && ghConfig.repo);
+
+  // Simple markdown renderer: **bold**, `code`, newlines
+  function renderMd(text) {
+    return text.split(/(\*\*[^*]+\*\*|`[^`]+`)/).map((p, i) => {
+      if (p.startsWith('**') && p.endsWith('**'))
+        return <strong key={i} style={{ color: C.text }}>{p.slice(2, -2)}</strong>;
+      if (p.startsWith('`') && p.endsWith('`'))
+        return <code key={i} style={{ fontFamily: 'IBM Plex Mono, monospace', background: C.bg, padding: '1px 5px', borderRadius: '3px', fontSize: '12px', color: C.accentGlow }}>{p.slice(1, -1)}</code>;
+      return p.split('\n').flatMap((line, j, arr) =>
+        j < arr.length - 1 ? [line, <br key={`${i}-${j}`} />] : [line]
+      );
+    });
+  }
+
+  async function send() {
+    if (!input.trim() || loading) return;
+    const text = input.trim();
+    setInput('');
+
+    const userMsg = { role: 'user', content: text };
+    const allMsgs = [...messages, userMsg];
+    setMessages(allMsgs);
+    setLoading(true);
+
+    // Build API history: skip the initial assistant greeting, start from first user msg
+    const apiHistory = [];
+    let started = false;
+    for (const m of allMsgs) {
+      if (!started && m.role === 'user') started = true;
+      if (started) apiHistory.push({ role: m.role, content: m.content });
+    }
+
+    try {
+      const res = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: 'claude-sonnet-4-20250514',
+          max_tokens: 2048,
+          system: buildPrompt(services),
+          messages: apiHistory,
+        }),
+      });
+
+      const data = await res.json();
+      if (data.error) throw new Error(data.error.message);
+
+      const raw = data.content?.map(b => b.text || '').join('') || '';
+      const updates = parseUpdates(raw);
+
+      if (updates.length) {
+        setServices(prev => {
+          let next = [...prev];
+          for (const u of updates) {
+            if (!u.service) continue;
+            const idx = next.findIndex(s => s.id === u.service.id);
+            if (u.action === 'remove') {
+              next = next.filter(s => s.id !== u.service.id);
+            } else {
+              if (idx >= 0) next[idx] = u.service;
+              else next.push(u.service);
+            }
+          }
+          return next;
+        });
+      }
+
+      const display = stripTags(raw);
+      setMessages(prev => [...prev, {
+        role: 'assistant',
+        content: display,
+        added: updates.length ? updates.map(u => u.service?.name).filter(Boolean) : null,
+      }]);
+    } catch (e) {
+      setMessages(prev => [...prev, { role: 'assistant', content: `Error: ${e.message}` }]);
+    }
+    setLoading(false);
+  }
+
+  function onKey(e) {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+  }
+
+  // ── Render ────────────────────────────────────────────────────────────────
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: C.bg, color: C.text, fontFamily: "'IBM Plex Sans', sans-serif", overflow: 'hidden' }}>
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap');
+        *{box-sizing:border-box;margin:0;padding:0;}
+        ::-webkit-scrollbar{width:4px;height:4px;}
+        ::-webkit-scrollbar-track{background:transparent;}
+        ::-webkit-scrollbar-thumb{background:${C.dim};border-radius:2px;}
+        .svc:hover{background:${C.card} !important;}
+        textarea:focus{border-color:${C.accentBr} !important;}
+        textarea::placeholder{color:${C.dim};}
+        @keyframes blink{0%,100%{opacity:.25}50%{opacity:1}}
+        .dot{width:5px;height:5px;border-radius:50%;background:${C.accentBr};animation:blink 1.2s ease-in-out infinite;}
+        .dot:nth-child(2){animation-delay:.2s}
+        .dot:nth-child(3){animation-delay:.4s}
+      `}</style>
+
+      {/* ── Header ── */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', height: '48px', padding: '0 16px', background: C.surface, borderBottom: `1px solid ${C.border}`, flexShrink: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <div style={{ width: '28px', height: '28px', border: `1.5px solid ${C.accentBr}`, borderRadius: '4px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.accentBr, fontFamily: 'IBM Plex Mono', fontSize: '14px', fontWeight: '700' }}>◈</div>
+          <span style={{ fontFamily: 'IBM Plex Mono', fontWeight: '700', fontSize: '13px', letterSpacing: '0.15em' }}>
+            ARCHITECT<span style={{ color: C.accentBr }}>AI</span>
+          </span>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          {editingName
+            ? <input ref={nameRef} value={projectName} onChange={e => setProjectName(e.target.value)}
+                onBlur={() => setEditingName(false)}
+                onKeyDown={e => { if (e.key === 'Enter' || e.key === 'Escape') setEditingName(false); }}
+                style={{ background: C.card, border: `1px solid ${C.accentBr}`, borderRadius: '4px', color: C.text, fontFamily: 'IBM Plex Mono', fontSize: '12px', padding: '3px 9px', outline: 'none', minWidth: '150px' }} />
+            : <span onClick={() => setEditingName(true)} title="Click to rename"
+                style={{ color: C.muted, fontFamily: 'IBM Plex Mono', fontSize: '12px', cursor: 'pointer', padding: '3px 9px', borderRadius: '4px', border: `1px solid transparent` }}>
+                {projectName}
+              </span>
+          }
+          {/* GitHub pull/push */}
+          {ghConnected && <>
+            <button onClick={ghPull} disabled={ghStatus === 'pulling' || ghStatus === 'pushing'}
+              title={`Pull ecosystem.json from ${ghConfig.owner}/${ghConfig.repo}`}
+              style={{ background: 'none', border: `1px solid ${C.border}`, borderRadius: '4px', color: ghStatus === 'pulling' ? C.amber : C.accentBr, cursor: 'pointer', fontSize: '11px', fontFamily: 'IBM Plex Mono', padding: '2px 9px' }}>
+              {ghStatus === 'pulling' ? '…' : '↓ pull'}
+            </button>
+            <button onClick={ghPush} disabled={ghStatus === 'pulling' || ghStatus === 'pushing' || !services.length}
+              title={`Push ecosystem.json to ${ghConfig.owner}/${ghConfig.repo}`}
+              style={{ background: 'none', border: `1px solid ${C.border}`, borderRadius: '4px', color: ghStatus === 'pushing' ? C.amber : C.green, cursor: 'pointer', fontSize: '11px', fontFamily: 'IBM Plex Mono', padding: '2px 9px' }}>
+              {ghStatus === 'pushing' ? '…' : '↑ push'}
+            </button>
+          </>}
+          <button title="GitHub settings" onClick={() => setShowGhPanel(p => !p)}
+            style={{ background: showGhPanel ? C.card : 'none', border: `1px solid ${showGhPanel ? C.accentBr : C.border}`, borderRadius: '4px', color: ghConnected ? C.accentBr : C.dim, cursor: 'pointer', fontSize: '13px', fontFamily: 'IBM Plex Mono', padding: '2px 8px', lineHeight: 1 }}>
+            ⎔
+          </button>
+          <button title="Reset ecosystem" onClick={() => {
+            if (window.confirm('Clear all services and start over?')) {
+              setServices([]); setSelected(null); setGhSha(null);
+              window.storage.set('architect-services', '[]').catch(() => {});
+            }
+          }} style={{ background: 'none', border: `1px solid ${C.border}`, borderRadius: '4px', color: C.dim, cursor: 'pointer', fontSize: '11px', fontFamily: 'IBM Plex Mono', padding: '2px 8px' }}>
+            ↺
+          </button>
+          <div style={{ width: '6px', height: '6px', borderRadius: '50%', background: loading ? C.amber : C.green, transition: 'background .3s' }} title={loading ? 'Thinking...' : 'Ready'} />
+        </div>
+      </div>
+
+      {/* ── GitHub settings panel ── */}
+      {showGhPanel && (
+        <div style={{ background: C.card, borderBottom: `1px solid ${C.border}`, padding: '14px 16px', display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'flex-end', flexShrink: 0 }}>
+          {[
+            { key: 'token',  label: 'PAT (token)',       type: 'password', placeholder: 'ghp_…',           width: '180px' },
+            { key: 'owner',  label: 'Owner',             type: 'text',     placeholder: 'rkamradt',         width: '120px' },
+            { key: 'repo',   label: 'Repo',              type: 'text',     placeholder: 'rkamradt-platform', width: '160px' },
+            { key: 'branch', label: 'Branch',            type: 'text',     placeholder: 'main',             width: '90px'  },
+            { key: 'path',   label: 'File path',         type: 'text',     placeholder: 'ecosystem.json',   width: '140px' },
+          ].map(f => (
+            <label key={f.key} style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+              <span style={{ color: C.dim, fontFamily: 'IBM Plex Mono', fontSize: '10px', fontWeight: '700', letterSpacing: '0.1em' }}>{f.label.toUpperCase()}</span>
+              <input type={f.type} value={ghConfig[f.key]} placeholder={f.placeholder}
+                onChange={e => saveGhConfig({ ...ghConfig, [f.key]: e.target.value })}
+                style={{ width: f.width, background: C.surface, border: `1px solid ${C.border}`, borderRadius: '4px', color: C.text, fontFamily: 'IBM Plex Mono', fontSize: '12px', padding: '5px 9px', outline: 'none' }} />
+            </label>
+          ))}
+          <button onClick={() => { ghPull(); setShowGhPanel(false); }}
+            disabled={!ghConnected}
+            style={{ background: C.accentBr, border: 'none', borderRadius: '4px', color: '#fff', cursor: ghConnected ? 'pointer' : 'not-allowed', fontFamily: 'IBM Plex Mono', fontSize: '11px', fontWeight: '700', padding: '7px 16px', alignSelf: 'flex-end', opacity: ghConnected ? 1 : 0.45 }}>
+            CONNECT & PULL
+          </button>
+        </div>
+      )}
+
+      {/* ── GitHub status bar ── */}
+      {ghMsg && (
+        <div style={{ background: ghStatus === 'error' ? C.red + '18' : C.green + '14', borderBottom: `1px solid ${ghStatus === 'error' ? C.red + '44' : C.green + '44'}`, padding: '5px 16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0 }}>
+          <span style={{ color: ghStatus === 'error' ? C.red : C.green, fontFamily: 'IBM Plex Mono', fontSize: '11px' }}>{ghMsg}</span>
+          <button onClick={() => setGhMsg('')} style={{ background: 'none', border: 'none', color: C.muted, cursor: 'pointer', fontFamily: 'IBM Plex Mono', fontSize: '12px' }}>×</button>
+        </div>
+      )}
+
+      {/* ── Body ── */}
+      <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
+
+        {/* ── Sidebar ── */}
+        <div style={{ width: '218px', flexShrink: 0, borderRight: `1px solid ${C.border}`, display: 'flex', flexDirection: 'column', background: C.surface }}>
+          <div style={{ padding: '10px 14px 6px', color: C.dim, fontSize: '10px', fontWeight: '700', letterSpacing: '0.15em', fontFamily: 'IBM Plex Mono' }}>
+            SERVICES{services.length ? ` · ${services.length}` : ''}
+          </div>
+          <div style={{ flex: 1, overflow: 'auto', padding: '0 8px 8px' }}>
+            {!services.length
+              ? <div style={{ padding: '10px 8px', color: C.dim, fontSize: '12px', lineHeight: '1.7', fontFamily: 'IBM Plex Mono' }}>Services appear<br />here as you build.</div>
+              : services.map(s => {
+                  const col = techColor(s.tech);
+                  const isSel = selected?.id === s.id;
+                  return (
+                    <div key={s.id} className="svc"
+                      onClick={() => setSelected(isSel ? null : s)}
+                      style={{ padding: '8px 10px', marginBottom: '3px', borderRadius: '6px', cursor: 'pointer', background: isSel ? C.card : 'transparent', border: `1px solid ${isSel ? col + '55' : 'transparent'}` }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '7px', marginBottom: '2px' }}>
+                        <div style={{ width: '6px', height: '6px', borderRadius: '50%', background: col, flexShrink: 0 }} />
+                        <div style={{ color: C.text, fontSize: '12px', fontWeight: '600', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.name}</div>
+                      </div>
+                      <div style={{ color: C.muted, fontSize: '11px', paddingLeft: '13px', fontFamily: 'IBM Plex Mono', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.tech || '—'}</div>
+                      <div style={{ paddingLeft: '13px', marginTop: '3px', display: 'flex', gap: '6px' }}>
+                        {s.apis?.length > 0 && <span style={{ color: C.amber, fontSize: '10px', fontFamily: 'IBM Plex Mono' }}>{s.apis.length} api</span>}
+                        {s.events?.length > 0 && <span style={{ color: C.green, fontSize: '10px', fontFamily: 'IBM Plex Mono' }}>{s.events.length} evt</span>}
+                        {s.dependencies?.length > 0 && <span style={{ color: C.accentBr, fontSize: '10px', fontFamily: 'IBM Plex Mono' }}>{s.dependencies.length} dep</span>}
+                      </div>
+                    </div>
+                  );
+                })
+            }
+          </div>
+        </div>
+
+        {/* ── Main ── */}
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', position: 'relative', overflow: 'hidden' }}>
+
+          {/* Tab bar */}
+          <div style={{ display: 'flex', borderBottom: `1px solid ${C.border}`, padding: '0 16px', background: C.surface, flexShrink: 0 }}>
+            {['chat', 'topology', 'export'].map(v => (
+              <button key={v} onClick={() => setView(v)} style={{
+                background: 'none', border: 'none', cursor: 'pointer', padding: '10px 16px',
+                color: view === v ? C.accentBr : C.muted,
+                borderBottom: `2px solid ${view === v ? C.accentBr : 'transparent'}`,
+                fontFamily: 'IBM Plex Mono', fontSize: '11px', fontWeight: '700',
+                letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: '-1px',
+                transition: 'color 0.15s',
+              }}>{v}</button>
+            ))}
+          </div>
+
+          {view === 'chat' ? (
+            <>
+              {/* Chat messages */}
+              <div style={{ flex: 1, overflow: 'auto', padding: '20px 22px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                {messages.map((m, i) => (
+                  <div key={i} style={{ display: 'flex', flexDirection: 'column', alignItems: m.role === 'user' ? 'flex-end' : 'flex-start', gap: '4px' }}>
+                    {m.role === 'assistant' && (
+                      <div style={{ color: C.accentBr, fontFamily: 'IBM Plex Mono', fontSize: '10px', fontWeight: '700', letterSpacing: '0.1em' }}>ARCHITECT</div>
+                    )}
+                    <div style={{
+                      maxWidth: '80%', padding: '11px 15px', fontSize: '14px', lineHeight: '1.65', color: C.text,
+                      borderRadius: m.role === 'user' ? '12px 12px 2px 12px' : '2px 12px 12px 12px',
+                      background: m.role === 'user' ? C.accentBr + '18' : C.card,
+                      border: `1px solid ${m.role === 'user' ? C.accentBr + '38' : C.border}`,
+                    }}>
+                      {renderMd(m.content)}
+                    </div>
+                    {m.added?.length > 0 && (
+                      <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                        {m.added.map((name, j) => (
+                          <div key={j} style={{ background: C.green + '14', border: `1px solid ${C.green}45`, borderRadius: '4px', padding: '3px 9px', fontSize: '11px', color: C.green, fontFamily: 'IBM Plex Mono' }}>
+                            ✓ {name} added
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ))}
+
+                {loading && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                    <div style={{ color: C.accentBr, fontFamily: 'IBM Plex Mono', fontSize: '10px', fontWeight: '700', letterSpacing: '0.1em' }}>ARCHITECT</div>
+                    <div style={{ display: 'flex', gap: '3px', padding: '10px 14px', background: C.card, borderRadius: '2px 12px 12px 12px', border: `1px solid ${C.border}` }}>
+                      <div className="dot" /><div className="dot" /><div className="dot" />
+                    </div>
+                  </div>
+                )}
+                <div ref={chatEndRef} />
+              </div>
+
+              {/* Input */}
+              <div style={{ borderTop: `1px solid ${C.border}`, padding: '12px 16px', display: 'flex', gap: '10px', alignItems: 'flex-end', background: C.surface, flexShrink: 0 }}>
+                <textarea value={input} onChange={e => setInput(e.target.value)} onKeyDown={onKey}
+                  placeholder="Describe your system, ask about service design, API contracts, event flows…" rows={2}
+                  style={{ flex: 1, background: C.card, border: `1px solid ${C.border}`, borderRadius: '8px', color: C.text, fontFamily: "'IBM Plex Sans', sans-serif", fontSize: '14px', padding: '10px 14px', resize: 'none', outline: 'none', lineHeight: '1.5' }} />
+                <button onClick={() => {
+                  setInput("I have an existing codebase I want to reverse-engineer into this ecosystem. I'll describe the services I found — please reconstruct the architecture and add each service using ecosystem_update blocks. Start by asking me to describe the first service.");
+                }} disabled={loading} title="Reverse-engineer existing code into the ecosystem"
+                  style={{ padding: '10px 12px', flexShrink: 0, background: 'none', border: `1px solid ${C.border}`, borderRadius: '8px', color: C.purple, cursor: 'pointer', fontFamily: 'IBM Plex Mono', fontSize: '11px', fontWeight: '700', letterSpacing: '0.06em', whiteSpace: 'nowrap' }}>
+                  ↺ REVERSE
+                </button>
+                <button onClick={send} disabled={loading || !input.trim()}
+                  style={{
+                    padding: '10px 18px', flexShrink: 0,
+                    background: loading || !input.trim() ? C.card : C.accentBr,
+                    border: `1px solid ${loading || !input.trim() ? C.border : C.accentBr}`,
+                    borderRadius: '8px',
+                    color: loading || !input.trim() ? C.muted : '#fff',
+                    cursor: loading || !input.trim() ? 'not-allowed' : 'pointer',
+                    fontFamily: 'IBM Plex Mono', fontSize: '11px', fontWeight: '700',
+                    letterSpacing: '0.06em', transition: 'all 0.15s',
+                  }}>SEND ▶</button>
+              </div>
+            </>
+          ) : view === 'topology' ? (
+            // Topology view
+            <div style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
+              <Topology services={services} onSelect={s => setSelected(prev => prev?.id === s.id ? null : s)} />
+              {services.length > 0 && (
+                <div style={{ position: 'absolute', bottom: '14px', left: '14px', color: C.muted, fontFamily: 'IBM Plex Mono', fontSize: '10px', background: C.surface + 'dd', padding: '4px 9px', borderRadius: '4px', border: `1px solid ${C.border}` }}>
+                  {services.length} service{services.length !== 1 ? 's' : ''} · click to inspect
+                </div>
+              )}
+            </div>
+          ) : (
+            // Export view
+            <ExportPanel services={services} projectName={projectName} />
+          )}
+
+          {/* Service detail overlay (not shown in export view) */}
+          {selected && view !== 'export' && <DetailPanel service={selected} onClose={() => setSelected(null)} />}
+        </div>
+      </div>
+    </div>
+  );
+}
