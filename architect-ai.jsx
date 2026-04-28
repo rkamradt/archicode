@@ -1069,32 +1069,22 @@ export default function ArchitectAI() {
     setShowImplPanel(true);
 
     try {
-      const token = await getAccessTokenSilently();
-      const baseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001';
-      const res = await fetch(`${baseUrl}/api/implement`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ repoName }),
-      });
+      // Start the background job — returns immediately with a jobId
+      const startRes = await api('/api/implement/start', 'POST', { repoName });
+      if (startRes.error) throw new Error(startRes.error);
+      const { jobId } = startRes;
 
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
-
+      // Poll for new events every 2 seconds until the job finishes
+      let since = 0;
       while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const parts = buffer.split('\n\n');
-        buffer = parts.pop();
-        for (const part of parts) {
-          const line = part.trim();
-          if (!line.startsWith('data: ')) continue;
-          try {
-            const event = JSON.parse(line.slice(6));
-            if (event.type !== 'ping') setImplLog(prev => [...prev, event]);
-          } catch {}
+        await new Promise(r => setTimeout(r, 2000));
+        const poll = await api(`/api/implement/${jobId}/poll?since=${since}`);
+        if (poll.error) throw new Error(poll.error);
+        if (poll.events.length > 0) {
+          setImplLog(prev => [...prev, ...poll.events]);
+          since += poll.events.length;
         }
+        if (poll.status === 'done' || poll.status === 'error') break;
       }
     } catch (e) {
       setImplLog(prev => [...prev, { type: 'error', message: e.message }]);
