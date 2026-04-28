@@ -808,13 +808,13 @@ function ExportPanel({ services, projectName }) {
 
       {/* Usage guide */}
       <div style={{ borderTop: `1px solid ${C.border}`, padding: '14px 16px', background: C.surface, flexShrink: 0 }}>
-        <div style={{ color: C.dim, fontFamily: 'IBM Plex Mono', fontSize: '10px', fontWeight: '700', letterSpacing: '0.14em', marginBottom: '10px' }}>DROP PATTERN → CLAUDE CODE WORKFLOW</div>
+        <div style={{ color: C.dim, fontFamily: 'IBM Plex Mono', fontSize: '10px', fontWeight: '700', letterSpacing: '0.14em', marginBottom: '10px' }}>GITHUB WORKFLOW</div>
         <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
           {[
-            ['1', `Place ecosystem.json in rkamradt-platform/`],
-            ['2', `Place spine CLAUDE.md in rkamradt-platform/`],
-            ['3', `cd <service-repo> && place service CLAUDE.md`],
-            ['4', `claude → "Scaffold this service per CLAUDE.md"`],
+            ['1', `Configure GitHub (⎔) with owner, repo, branch, and PAT`],
+            ['2', `↑ push — commits ecosystem.json, spec.md, and CLAUDE.md files to your repo`],
+            ['3', `⬡ implement — creates the repo and scaffolds all service code via Claude`],
+            ['4', `↓ pull — restores ecosystem from a previously pushed ecosystem.json`],
           ].map(([n, label]) => (
             <div key={n} style={{ display: 'flex', gap: '7px', alignItems: 'flex-start', background: C.card, borderRadius: '5px', padding: '7px 10px', flex: '1 1 45%', minWidth: '200px' }}>
               <span style={{ color: C.accentBr, fontFamily: 'IBM Plex Mono', fontWeight: '700', fontSize: '11px', minWidth: '14px' }}>{n}</span>
