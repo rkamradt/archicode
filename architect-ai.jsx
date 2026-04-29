@@ -1077,7 +1077,7 @@ export default function ArchitectAI() {
       // Poll for new events every 2 seconds until the job finishes
       let since = 0;
       while (true) {
-        await new Promise(r => setTimeout(r, 2000));
+        await new Promise(r => setTimeout(r, 10000));
         const poll = await api(`/api/implement/${jobId}/poll?since=${since}`);
         if (poll.error) throw new Error(poll.error);
         if (poll.events.length > 0) {
