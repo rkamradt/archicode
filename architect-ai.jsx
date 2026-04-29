@@ -1061,11 +1061,11 @@ export default function ArchitectAI() {
 
   async function implement() {
     if (!services.length || implRunning) return;
-    if (!ghConnected) {
+    // Implement only needs token + owner (repo name comes from the project name, not ghConfig.repo)
+    if (!ghConfig.token || !ghConfig.owner) {
       const missing = [
         !ghConfig.token && 'token (PAT)',
         !ghConfig.owner && 'owner',
-        !ghConfig.repo  && 'repo',
       ].filter(Boolean).join(', ');
       setImplLog([{ type: 'error', message: `GitHub not configured — missing: ${missing}. Open ⎔ and fill in all fields.` }]);
       setShowImplPanel(true);
