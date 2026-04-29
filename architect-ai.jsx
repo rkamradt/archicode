@@ -1062,8 +1062,14 @@ export default function ArchitectAI() {
   async function implement() {
     if (!services.length || implRunning) return;
     if (!ghConnected) {
-      setImplLog([{ type: 'error', message: 'GitHub not configured — open the ⎔ settings panel and enter your token, owner, and repo.' }]);
+      const missing = [
+        !ghConfig.token && 'token (PAT)',
+        !ghConfig.owner && 'owner',
+        !ghConfig.repo  && 'repo',
+      ].filter(Boolean).join(', ');
+      setImplLog([{ type: 'error', message: `GitHub not configured — missing: ${missing}. Open ⎔ and fill in all fields.` }]);
       setShowImplPanel(true);
+      setShowGhPanel(true);
       return;
     }
     const repoName = toRepoName(projectName);
@@ -1393,19 +1399,24 @@ export default function ArchitectAI() {
       {showGhPanel && (
         <div style={{ background: C.card, borderBottom: `1px solid ${C.border}`, padding: '14px 16px', display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'flex-end', flexShrink: 0 }}>
           {[
-            { key: 'token',  label: 'PAT (token)',       type: 'password', placeholder: 'ghp_…',           width: '180px' },
-            { key: 'owner',  label: 'Owner',             type: 'text',     placeholder: 'rkamradt',         width: '120px' },
-            { key: 'repo',   label: 'Repo',              type: 'text',     placeholder: 'rkamradt-platform', width: '160px' },
-            { key: 'branch', label: 'Branch',            type: 'text',     placeholder: 'main',             width: '90px'  },
-            { key: 'path',   label: 'File path',         type: 'text',     placeholder: 'ecosystem.json',   width: '140px' },
-          ].map(f => (
-            <label key={f.key} style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-              <span style={{ color: C.dim, fontFamily: 'IBM Plex Mono', fontSize: '10px', fontWeight: '700', letterSpacing: '0.1em' }}>{f.label.toUpperCase()}</span>
-              <input type={f.type} value={ghConfig[f.key]} placeholder={f.placeholder}
-                onChange={e => saveGhConfig({ ...ghConfig, [f.key]: e.target.value })}
-                style={{ width: f.width, background: C.surface, border: `1px solid ${C.border}`, borderRadius: '4px', color: C.text, fontFamily: 'IBM Plex Mono', fontSize: '12px', padding: '5px 9px', outline: 'none' }} />
-            </label>
-          ))}
+            { key: 'token',  label: 'PAT (token)',       type: 'password', placeholder: 'ghp_…',            width: '180px', required: true },
+            { key: 'owner',  label: 'Owner',             type: 'text',     placeholder: 'rkamradt',          width: '120px', required: true },
+            { key: 'repo',   label: 'Repo',              type: 'text',     placeholder: 'rkamradt-platform', width: '160px', required: true },
+            { key: 'branch', label: 'Branch',            type: 'text',     placeholder: 'main',              width: '90px'  },
+            { key: 'path',   label: 'File path',         type: 'text',     placeholder: 'ecosystem.json',    width: '140px' },
+          ].map(f => {
+            const isEmpty = f.required && !ghConfig[f.key];
+            return (
+              <label key={f.key} style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                <span style={{ color: isEmpty ? C.amber : C.dim, fontFamily: 'IBM Plex Mono', fontSize: '10px', fontWeight: '700', letterSpacing: '0.1em' }}>
+                  {f.label.toUpperCase()}{isEmpty ? ' ⚠' : ''}
+                </span>
+                <input type={f.type} value={ghConfig[f.key]} placeholder={f.placeholder}
+                  onChange={e => saveGhConfig({ ...ghConfig, [f.key]: e.target.value })}
+                  style={{ width: f.width, background: C.surface, border: `1px solid ${isEmpty ? C.amber + '88' : C.border}`, borderRadius: '4px', color: C.text, fontFamily: 'IBM Plex Mono', fontSize: '12px', padding: '5px 9px', outline: 'none' }} />
+              </label>
+            );
+          })}
           <button onClick={() => { ghPull(); setShowGhPanel(false); }}
             disabled={!ghConnected}
             style={{ background: C.accentBr, border: 'none', borderRadius: '4px', color: '#fff', cursor: ghConnected ? 'pointer' : 'not-allowed', fontFamily: 'IBM Plex Mono', fontSize: '11px', fontWeight: '700', padding: '7px 16px', alignSelf: 'flex-end', opacity: ghConnected ? 1 : 0.45 }}>
