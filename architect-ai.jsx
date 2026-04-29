@@ -936,6 +936,7 @@ export default function ArchitectAI() {
   const [implLog, setImplLog] = useState([]);
   const [showImplPanel, setShowImplPanel] = useState(false);
   const implLogEndRef = useRef(null);
+  const implJobIdRef  = useRef(null); // current background job ID for cancellation
   const [implConfirm, setImplConfirm] = useState(null); // { repoName } | null
 
   // ── Build status tracking ─────────────────────────────────────────────────────
@@ -1098,6 +1099,7 @@ export default function ArchitectAI() {
       const startRes = await api('/api/implement/start', 'POST', { repoName });
       if (startRes.error) throw new Error(startRes.error);
       const { jobId } = startRes;
+      implJobIdRef.current = jobId;
 
       let since = 0;
       while (true) {
@@ -1108,11 +1110,12 @@ export default function ArchitectAI() {
           setImplLog(prev => [...prev, ...poll.events]);
           since += poll.events.length;
         }
-        if (poll.status === 'done' || poll.status === 'error') {
+        if (poll.status === 'done' || poll.status === 'error' || poll.status === 'cancelled') {
           succeeded = poll.status === 'done';
           break;
         }
       }
+      implJobIdRef.current = null;
     } catch (e) {
       setImplLog(prev => [...prev, { type: 'error', message: e.message }]);
     }
@@ -1134,6 +1137,13 @@ export default function ArchitectAI() {
         return next;
       });
     }
+  }
+
+  async function killImpl() {
+    const jobId = implJobIdRef.current;
+    if (!jobId) return;
+    await api(`/api/implement/${jobId}/cancel`, 'POST');
+    setImplLog(prev => [...prev, { type: 'info', message: 'Cancellation requested — stopping after current session' }]);
   }
 
   function startBuildPolling(repoName) {
@@ -1409,8 +1419,16 @@ export default function ArchitectAI() {
             <span style={{ color: C.dim, fontFamily: 'IBM Plex Mono', fontSize: '10px', fontWeight: '700', letterSpacing: '0.14em' }}>
               IMPLEMENTATION LOG — {toRepoName(projectName)}
             </span>
-            <button onClick={() => setShowImplPanel(false)}
-              style={{ background: 'none', border: 'none', color: C.muted, cursor: 'pointer', fontFamily: 'IBM Plex Mono', fontSize: '13px' }}>×</button>
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+              {implRunning && (
+                <button onClick={killImpl}
+                  style={{ background: C.red + '18', border: `1px solid ${C.red + '55'}`, borderRadius: '4px', color: C.red, cursor: 'pointer', fontFamily: 'IBM Plex Mono', fontSize: '10px', fontWeight: '700', padding: '2px 10px', letterSpacing: '0.08em' }}>
+                  ✕ KILL
+                </button>
+              )}
+              <button onClick={() => setShowImplPanel(false)}
+                style={{ background: 'none', border: 'none', color: C.muted, cursor: 'pointer', fontFamily: 'IBM Plex Mono', fontSize: '13px' }}>×</button>
+            </div>
           </div>
           <div style={{ maxHeight: '220px', overflow: 'auto', padding: '8px 16px', display: 'flex', flexDirection: 'column', gap: '3px' }}>
             {implLog.map((entry, i) => {
