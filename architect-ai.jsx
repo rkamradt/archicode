@@ -938,6 +938,19 @@ export default function ArchitectAI() {
   const implLogEndRef = useRef(null);
   const [implConfirm, setImplConfirm] = useState(null); // { repoName } | null
 
+  // ── Build status tracking ─────────────────────────────────────────────────────
+  // Keyed by service ID. Status: 'designing'|'implementing'|'building'|'built'|'build_failed'
+  const [svcStatuses, setSvcStatuses] = useState({});
+  const buildPollRef = useRef(null);
+
+  const STATUS_META = {
+    designing:    { color: C.muted,   symbol: '○', label: null },
+    implementing: { color: C.amber,   symbol: '◎', label: 'IMPL' },
+    building:     { color: C.accentBr,symbol: '◎', label: 'BUILD' },
+    built:        { color: C.green,   symbol: '✓', label: 'BUILT' },
+    build_failed: { color: C.red,     symbol: '✗', label: 'FAILED' },
+  };
+
   useEffect(() => {
     if (showImplPanel) implLogEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [implLog, showImplPanel]);
@@ -1073,13 +1086,19 @@ export default function ArchitectAI() {
     setImplRunning(true);
     setShowImplPanel(true);
 
+    // Mark all non-mock services as 'implementing'
+    setSvcStatuses(prev => {
+      const next = { ...prev };
+      services.forEach(s => { next[s.id] = 'implementing'; });
+      return next;
+    });
+
+    let succeeded = false;
     try {
-      // Start the background job — returns immediately with a jobId
       const startRes = await api('/api/implement/start', 'POST', { repoName });
       if (startRes.error) throw new Error(startRes.error);
       const { jobId } = startRes;
 
-      // Poll for new events every 2 seconds until the job finishes
       let since = 0;
       while (true) {
         await new Promise(r => setTimeout(r, 10000));
@@ -1089,13 +1108,81 @@ export default function ArchitectAI() {
           setImplLog(prev => [...prev, ...poll.events]);
           since += poll.events.length;
         }
-        if (poll.status === 'done' || poll.status === 'error') break;
+        if (poll.status === 'done' || poll.status === 'error') {
+          succeeded = poll.status === 'done';
+          break;
+        }
       }
     } catch (e) {
       setImplLog(prev => [...prev, { type: 'error', message: e.message }]);
     }
 
     setImplRunning(false);
+
+    if (succeeded) {
+      // Transition all services to 'building' and start polling GitHub Actions
+      setSvcStatuses(prev => {
+        const next = { ...prev };
+        services.forEach(s => { next[s.id] = 'building'; });
+        return next;
+      });
+      startBuildPolling(repoName);
+    } else {
+      setSvcStatuses(prev => {
+        const next = { ...prev };
+        services.forEach(s => { next[s.id] = 'designing'; });
+        return next;
+      });
+    }
+  }
+
+  function startBuildPolling(repoName) {
+    if (buildPollRef.current) clearInterval(buildPollRef.current);
+
+    const poll = async () => {
+      try {
+        const data = await api(`/api/github/actions-status?repoName=${encodeURIComponent(repoName)}`);
+        if (data.error || !data.statuses) return;
+
+        setSvcStatuses(prev => {
+          const next = { ...prev };
+          for (const [sid, info] of Object.entries(data.statuses)) {
+            next[sid] = info.status;
+          }
+          return next;
+        });
+
+        // Check if all services have resolved
+        const currentStatuses = { ...svcStatuses, ...data.statuses };
+        const allResolved = services.every(s => {
+          const st = (data.statuses[s.id]?.status) ?? svcStatuses[s.id];
+          return st === 'built' || st === 'build_failed';
+        });
+
+        if (allResolved) {
+          clearInterval(buildPollRef.current);
+          buildPollRef.current = null;
+
+          const failed = services.filter(s => data.statuses[s.id]?.status === 'build_failed');
+          const built  = services.filter(s => data.statuses[s.id]?.status === 'built');
+
+          if (failed.length === 0) {
+            setMessages(prev => [...prev, { role: 'assistant', content:
+              `All ${built.length} service build${built.length === 1 ? '' : 's'} succeeded. The ecosystem is live.\n\nYou can now refine the spec, add services, or ask me about the architecture.`,
+            }]);
+          } else {
+            const failList = failed.map(s => `- **${s.name}** — [view run](${data.statuses[s.id]?.url})`).join('\n');
+            setMessages(prev => [...prev, { role: 'assistant', content:
+              `${failed.length} build${failed.length === 1 ? '' : 's'} failed:\n\n${failList}\n\nDescribe what you'd like to fix and I can update the spec, or paste the error logs and I'll diagnose the issue.`,
+            }]);
+          }
+          setView('chat');
+        }
+      } catch {}
+    };
+
+    // First poll after 30s (give GitHub time to queue the runs)
+    buildPollRef.current = setInterval(poll, 30000);
   }
 
   // Simple markdown renderer: **bold**, `code`, newlines
@@ -1429,6 +1516,16 @@ export default function ArchitectAI() {
                             {archetypeLabel(s.archetype)}
                           </span>
                         )}
+                        {(() => {
+                          const st = svcStatuses[s.id];
+                          const meta = STATUS_META[st];
+                          if (!meta?.label) return null;
+                          return (
+                            <span style={{ color: meta.color, fontFamily: 'IBM Plex Mono', fontSize: '8px', fontWeight: '700', flexShrink: 0 }}>
+                              {meta.symbol} {meta.label}
+                            </span>
+                          );
+                        })()}
                       </div>
                       <div style={{ color: C.muted, fontSize: '11px', paddingLeft: '13px', fontFamily: 'IBM Plex Mono', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.tech || '—'}</div>
                       <div style={{ paddingLeft: '13px', marginTop: '3px', display: 'flex', gap: '6px' }}>
