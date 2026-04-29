@@ -1061,6 +1061,11 @@ export default function ArchitectAI() {
 
   async function implement() {
     if (!services.length || implRunning) return;
+    if (!ghConnected) {
+      setImplLog([{ type: 'error', message: 'GitHub not configured — open the ⎔ settings panel and enter your token, owner, and repo.' }]);
+      setShowImplPanel(true);
+      return;
+    }
     const repoName = toRepoName(projectName);
 
     // Check whether the repo already exists before starting
@@ -1333,12 +1338,15 @@ export default function ArchitectAI() {
               style={{ background: 'none', border: `1px solid ${C.border}`, borderRadius: '4px', color: ghStatus === 'pushing' ? C.amber : C.green, cursor: 'pointer', fontSize: '11px', fontFamily: 'IBM Plex Mono', padding: '2px 9px' }}>
               {ghStatus === 'pushing' ? '…' : '↑ push'}
             </button>
-            <button onClick={implement} disabled={implRunning || !services.length}
-              title={`Scaffold ${toRepoName(projectName)} and push to GitHub`}
-              style={{ background: implRunning ? C.card : C.purple + '22', border: `1px solid ${implRunning || !services.length ? C.border : C.purple + '88'}`, borderRadius: '4px', color: implRunning ? C.muted : C.purple, cursor: implRunning || !services.length ? 'not-allowed' : 'pointer', fontSize: '11px', fontFamily: 'IBM Plex Mono', padding: '2px 9px', fontWeight: '700' }}>
+          </>}
+          {/* Implement — shown whenever services exist; reports missing config on click */}
+          {!!services.length && (
+            <button onClick={implement} disabled={implRunning}
+              title={ghConnected ? `Scaffold ${toRepoName(projectName)} and push to GitHub` : 'Configure GitHub (⎔) to use implement'}
+              style={{ background: implRunning ? C.card : C.purple + '22', border: `1px solid ${implRunning ? C.border : C.purple + '88'}`, borderRadius: '4px', color: implRunning ? C.muted : C.purple, cursor: implRunning ? 'not-allowed' : 'pointer', fontSize: '11px', fontFamily: 'IBM Plex Mono', padding: '2px 9px', fontWeight: '700' }}>
               {implRunning ? '⟳ building…' : '▶ implement'}
             </button>
-          </>}
+          )}
           <button title="Anthropic API key" onClick={() => { setShowKeyPanel(p => !p); setApiKeyInput(''); setApiKeyError(''); }}
             style={{ background: showKeyPanel ? C.card : 'none', border: `1px solid ${showKeyPanel ? C.accentBr : C.border}`, borderRadius: '4px', color: C.accentBr, cursor: 'pointer', fontSize: '11px', fontFamily: 'IBM Plex Mono', padding: '2px 8px', lineHeight: 1 }}>
             ⚿
