@@ -1401,6 +1401,9 @@ export default function ArchitectAI() {
             style={{ background: C.accentBr, border: 'none', borderRadius: '4px', color: '#fff', cursor: ghConnected ? 'pointer' : 'not-allowed', fontFamily: 'IBM Plex Mono', fontSize: '11px', fontWeight: '700', padding: '7px 16px', alignSelf: 'flex-end', opacity: ghConnected ? 1 : 0.45 }}>
             CONNECT & PULL
           </button>
+          <div style={{ width: '100%', color: C.dim, fontFamily: 'IBM Plex Mono', fontSize: '10px', marginTop: '4px' }}>
+            ⚠ PAT requires scopes: <strong style={{ color: C.muted }}>repo</strong> + <strong style={{ color: C.muted }}>workflow</strong> (needed to push GitHub Actions files)
+          </div>
         </div>
       )}
 
