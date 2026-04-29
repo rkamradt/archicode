@@ -905,6 +905,11 @@ export default function ArchitectAI() {
         const data = await api('/api/ecosystem');
         if (data.services) setServices(data.services);
         if (data.projectName) setProjectName(data.projectName);
+        if (data.services?.length) {
+          setMessages([{ role: 'assistant', content:
+            `Welcome back to **ArchitectAI**.\n\n**${data.projectName || 'Your ecosystem'}** has ${data.services.length} service${data.services.length === 1 ? '' : 's'} defined.\n\nNext steps:\n- **⬡ Implement** — scaffold all services and push code to GitHub\n- **↑ push** — commit the spec, CLAUDE.md, and ecosystem.json to your repo\n- Ask me to add or refine services, adjust APIs, or rethink boundaries`,
+          }]);
+        }
       } catch {}
       setHydrated(true);
     })();
@@ -1495,7 +1500,17 @@ export default function ArchitectAI() {
                 <div ref={chatEndRef} />
               </div>
 
+              {/* Implementation-in-progress banner */}
+              {implRunning && (
+                <div style={{ borderTop: `1px solid ${C.border}`, padding: '10px 16px', background: C.amber + '14', display: 'flex', alignItems: 'center', gap: '10px', flexShrink: 0 }}>
+                  <span style={{ color: C.amber, fontFamily: 'IBM Plex Mono', fontSize: '11px', fontWeight: '700' }}>⬡ IMPLEMENTATION IN PROGRESS</span>
+                  <span style={{ color: C.muted, fontFamily: 'IBM Plex Mono', fontSize: '11px' }}>Watch the log above · chat is paused</span>
+                  <button onClick={() => setShowImplPanel(true)} style={{ marginLeft: 'auto', background: 'none', border: `1px solid ${C.amber + '66'}`, borderRadius: '4px', color: C.amber, cursor: 'pointer', fontFamily: 'IBM Plex Mono', fontSize: '10px', fontWeight: '700', padding: '3px 10px' }}>SHOW LOG</button>
+                </div>
+              )}
+
               {/* Input */}
+              {!implRunning && (
               <div style={{ borderTop: `1px solid ${C.border}`, padding: '12px 16px', display: 'flex', gap: '10px', alignItems: 'flex-end', background: C.surface, flexShrink: 0 }}>
                 <textarea value={input} onChange={e => setInput(e.target.value)} onKeyDown={onKey}
                   placeholder="Describe your system, ask about service design, API contracts, event flows…" rows={2}
@@ -1518,6 +1533,7 @@ export default function ArchitectAI() {
                     letterSpacing: '0.06em', transition: 'all 0.15s',
                   }}>SEND ▶</button>
               </div>
+              )}
             </>
           ) : view === 'topology' ? (
             // Topology view
