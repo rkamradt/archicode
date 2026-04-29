@@ -1466,17 +1466,21 @@ export default function ArchitectAI() {
                 </div>
               );
               if (entry.type === 'done') return (
-                <div key={i} style={{ color: C.green, fontFamily: 'IBM Plex Mono', fontSize: '11px', fontWeight: '700', paddingTop: '6px' }}>
-                  ✓ {entry.message}{' '}
-                  {entry.repoUrl && (
-                    <a href={entry.repoUrl} target="_blank" rel="noreferrer"
-                      style={{ color: C.accentBr, textDecoration: 'underline', fontWeight: '400' }}>
-                      {entry.repoUrl}
-                    </a>
-                  )}
-                  {entry.errors?.length > 0 && (
-                    <span style={{ color: C.amber, fontWeight: '400' }}> ({entry.errors.length} push errors)</span>
-                  )}
+                <div key={i} style={{ paddingTop: '6px', display: 'flex', flexDirection: 'column', gap: '3px' }}>
+                  <div style={{ color: C.green, fontFamily: 'IBM Plex Mono', fontSize: '11px', fontWeight: '700' }}>
+                    ✓ {entry.message}{' '}
+                    {entry.repoUrl && (
+                      <a href={entry.repoUrl} target="_blank" rel="noreferrer"
+                        style={{ color: C.accentBr, textDecoration: 'underline', fontWeight: '400' }}>
+                        {entry.repoUrl}
+                      </a>
+                    )}
+                  </div>
+                  {entry.errors?.map((e, j) => (
+                    <div key={j} style={{ color: C.amber, fontFamily: 'IBM Plex Mono', fontSize: '10px', paddingLeft: '12px' }}>
+                      ↑ failed: {e.path} — {e.error}
+                    </div>
+                  ))}
                 </div>
               );
               if (entry.type === 'info') return (
