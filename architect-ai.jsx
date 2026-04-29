@@ -900,6 +900,7 @@ export default function ArchitectAI() {
   const [hydrated, setHydrated] = useState(false);
 
   useEffect(() => {
+    if (!isAuthenticated || !profileChecked || !hasApiKey) return;
     (async () => {
       try {
         const data = await api('/api/ecosystem');
@@ -913,7 +914,7 @@ export default function ArchitectAI() {
       } catch {}
       setHydrated(true);
     })();
-  }, []);
+  }, [isAuthenticated, profileChecked, hasApiKey]);
 
   useEffect(() => {
     if (!hydrated) return;
@@ -956,12 +957,13 @@ export default function ArchitectAI() {
     if (showImplPanel) implLogEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [implLog, showImplPanel]);
 
-  // Load gh config from backend on mount
+  // Load gh config from backend once user is authenticated and set up
   useEffect(() => {
+    if (!isAuthenticated || !profileChecked || !hasApiKey) return;
     api('/api/github/config').then(cfg => {
       if (cfg && !cfg.error) setGhConfig(prev => ({ ...prev, ...cfg }));
     }).catch(() => {});
-  }, []);
+  }, [isAuthenticated, profileChecked, hasApiKey]);
 
   if (isLoading) return (
     <div style={{ color: '#64748b', padding: '40px', fontFamily: 'IBM Plex Mono' }}>Loading…</div>
