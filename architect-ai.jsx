@@ -806,19 +806,19 @@ function ExportPanel({ services, projectName }) {
         )}
       </div>
 
-      {/* Usage guide */}
+      {/* Artifact descriptions */}
       <div style={{ borderTop: `1px solid ${C.border}`, padding: '14px 16px', background: C.surface, flexShrink: 0 }}>
-        <div style={{ color: C.dim, fontFamily: 'IBM Plex Mono', fontSize: '10px', fontWeight: '700', letterSpacing: '0.14em', marginBottom: '10px' }}>GITHUB WORKFLOW</div>
+        <div style={{ color: C.dim, fontFamily: 'IBM Plex Mono', fontSize: '10px', fontWeight: '700', letterSpacing: '0.14em', marginBottom: '10px' }}>GENERATED ARTIFACTS</div>
         <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
           {[
-            ['1', `Configure GitHub (⎔) with owner, repo, branch, and PAT`],
-            ['2', `↑ push — commits ecosystem.json, spec.md, and CLAUDE.md files to your repo`],
-            ['3', `⬡ implement — creates the repo and scaffolds all service code via Claude`],
-            ['4', `↓ pull — restores ecosystem from a previously pushed ecosystem.json`],
-          ].map(([n, label]) => (
-            <div key={n} style={{ display: 'flex', gap: '7px', alignItems: 'flex-start', background: C.card, borderRadius: '5px', padding: '7px 10px', flex: '1 1 45%', minWidth: '200px' }}>
-              <span style={{ color: C.accentBr, fontFamily: 'IBM Plex Mono', fontWeight: '700', fontSize: '11px', minWidth: '14px' }}>{n}</span>
-              <span style={{ color: C.muted, fontFamily: 'IBM Plex Mono', fontSize: '11px', lineHeight: '1.5' }}>{label}</span>
+            ['spec.md',        'Human-readable living specification — describes every service, its APIs, events, and dependencies.'],
+            ['Spine CLAUDE.md','Context file for Claude Code at the ecosystem root — links all services together for cross-cutting work.'],
+            ['ecosystem.json', 'Machine-readable service registry — used by ▶ implement to scaffold code and by ↓ pull to restore this view.'],
+            ['Service CLAUDE.md','Per-service context file for Claude Code — describes that service\'s purpose, APIs, events, and tech stack.'],
+          ].map(([name, desc]) => (
+            <div key={name} style={{ display: 'flex', gap: '7px', alignItems: 'flex-start', background: C.card, borderRadius: '5px', padding: '7px 10px', flex: '1 1 45%', minWidth: '200px' }}>
+              <span style={{ color: C.accentBr, fontFamily: 'IBM Plex Mono', fontWeight: '700', fontSize: '11px', minWidth: '80px', flexShrink: 0 }}>{name}</span>
+              <span style={{ color: C.muted, fontFamily: 'IBM Plex Mono', fontSize: '11px', lineHeight: '1.5' }}>{desc}</span>
             </div>
           ))}
         </div>
@@ -1591,7 +1591,7 @@ export default function ArchitectAI() {
 
           {/* Tab bar */}
           <div style={{ display: 'flex', borderBottom: `1px solid ${C.border}`, padding: '0 16px', background: C.surface, flexShrink: 0 }}>
-            {['chat', 'topology', 'export'].map(v => (
+            {[['chat', 'chat'], ['topology', 'topology'], ['export', 'artifacts']].map(([v, label]) => (
               <button key={v} onClick={() => setView(v)} style={{
                 background: 'none', border: 'none', cursor: 'pointer', padding: '10px 16px',
                 color: view === v ? C.accentBr : C.muted,
@@ -1599,7 +1599,7 @@ export default function ArchitectAI() {
                 fontFamily: 'IBM Plex Mono', fontSize: '11px', fontWeight: '700',
                 letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: '-1px',
                 transition: 'color 0.15s',
-              }}>{v}</button>
+              }}>{label}</button>
             ))}
           </div>
 
