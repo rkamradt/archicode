@@ -829,7 +829,7 @@ function ExportPanel({ services, projectName }) {
 
 // ── Main App ──────────────────────────────────────────────────────────────────
 export default function ArchitectAI() {
-  const { isAuthenticated, isLoading, loginWithRedirect, logout, getAccessTokenSilently } = useAuth0();
+  const { isAuthenticated, isLoading, loginWithRedirect, logout, getAccessTokenSilently, user } = useAuth0();
 
   const api = async (path, method = 'GET', body = null) => {
     const token = await getAccessTokenSilently();
@@ -850,10 +850,16 @@ export default function ArchitectAI() {
   const [apiKeySaving, setApiKeySaving] = useState(false);
   const [apiKeyError, setApiKeyError] = useState('');
 
+  // GitHub user-level credentials (stored server-side)
+  const [ghHasToken, setGhHasToken] = useState(false);
+  const [ghOwner, setGhOwner]       = useState('');
+
   useEffect(() => {
     if (!isAuthenticated) return;
     api('/api/user/profile').then(data => {
       setHasApiKey(!!data.hasApiKey);
+      setGhHasToken(!!data.hasGithubToken);
+      setGhOwner(data.githubOwner || '');
       setProfileChecked(true);
     }).catch(() => setProfileChecked(true));
   }, [isAuthenticated]);
@@ -896,41 +902,55 @@ export default function ArchitectAI() {
     if (editingName) { nameRef.current?.focus(); nameRef.current?.select(); }
   }, [editingName]);
 
-  // ── Persist & hydrate ────────────────────────────────────────────────────────
+  // ── Persist & hydrate (localStorage) ─────────────────────────────────────────
+  // GitHub is the primary save; localStorage is a best-effort session cache.
   const [hydrated, setHydrated] = useState(false);
+  const [repoName, setRepoName] = useState(''); // current ecosystem's GitHub repo
 
   useEffect(() => {
     if (!isAuthenticated || !profileChecked || !hasApiKey) return;
-    (async () => {
-      try {
-        const data = await api('/api/ecosystem');
-        if (data.services) setServices(data.services);
-        if (data.projectName) setProjectName(data.projectName);
-        if (data.services?.length) {
-          setMessages([{ role: 'assistant', content:
-            `Welcome back to **ArchitectAI**.\n\n**${data.projectName || 'Your ecosystem'}** has ${data.services.length} service${data.services.length === 1 ? '' : 's'} defined.\n\nNext steps:\n- **⬡ Implement** — scaffold all services and push code to GitHub\n- **↑ push** — commit the spec, CLAUDE.md, and ecosystem.json to your repo\n- Ask me to add or refine services, adjust APIs, or rethink boundaries`,
-          }]);
+    try {
+      const cacheKey = user?.sub ? `architectai:${user.sub}` : null;
+      if (cacheKey) {
+        const cached = localStorage.getItem(cacheKey);
+        if (cached) {
+          const { projectName: pn, services: svc, repoName: rn } = JSON.parse(cached);
+          if (svc?.length)  setServices(svc);
+          if (pn)           setProjectName(pn);
+          if (rn)           setRepoName(rn);
+          if (svc?.length) {
+            setMessages([{ role: 'assistant', content:
+              `Welcome back to **ArchitectAI**.\n\n**${pn || 'Your ecosystem'}** has ${svc.length} service${svc.length === 1 ? '' : 's'} defined.\n\nNext steps:\n- **▶ implement** — scaffold all services and push code to GitHub\n- **↑ push** — commit the spec, CLAUDE.md, and ecosystem.json to your repo\n- Ask me to add or refine services, adjust APIs, or rethink boundaries`,
+            }]);
+          }
         }
-      } catch {}
-      setHydrated(true);
-    })();
+      }
+    } catch {}
+    setHydrated(true);
   }, [isAuthenticated, profileChecked, hasApiKey]);
 
+  // Write to localStorage whenever ecosystem state changes
   useEffect(() => {
-    if (!hydrated) return;
-    api('/api/ecosystem', 'PUT', { services, projectName }).catch(() => {});
-  }, [services, hydrated]);
-
-  useEffect(() => {
-    if (!hydrated) return;
-    api('/api/ecosystem', 'PUT', { services, projectName }).catch(() => {});
-  }, [projectName, hydrated]);
+    if (!hydrated || !user?.sub) return;
+    try {
+      localStorage.setItem(`architectai:${user.sub}`, JSON.stringify({ projectName, services, repoName, savedAt: Date.now() }));
+    } catch {}
+  }, [services, projectName, repoName, hydrated]);
 
   // ── GitHub integration ────────────────────────────────────────────────────────
-  const [ghConfig, setGhConfig] = useState({ token: '', owner: '', repo: '', branch: 'main', path: 'ecosystem.json' });
+  // Token + owner are user-level (server-side). Repo is ecosystem-level (localStorage).
+  // ⎔ panel inputs (local form state, not auto-saved)
+  const [ghTokenInput, setGhTokenInput] = useState('');
+  const [ghOwnerInput, setGhOwnerInput] = useState('');
+  const [ghRepoInput,  setGhRepoInput]  = useState('');
+  const [ghSaving,     setGhSaving]     = useState(false);
   const [ghStatus, setGhStatus] = useState(null); // null | 'pulling' | 'pushing' | 'ok' | 'error'
-  const [ghMsg, setGhMsg] = useState('');
+  const [ghMsg, setGhMsg]       = useState('');
   const [showGhPanel, setShowGhPanel] = useState(false);
+
+  // Sync panel inputs when profile or repoName loads
+  useEffect(() => { setGhOwnerInput(ghOwner); }, [ghOwner]);
+  useEffect(() => { setGhRepoInput(repoName); }, [repoName]);
 
   // ── Implement ─────────────────────────────────────────────────────────────────
   const [implRunning, setImplRunning] = useState(false);
@@ -957,13 +977,6 @@ export default function ArchitectAI() {
     if (showImplPanel) implLogEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [implLog, showImplPanel]);
 
-  // Load gh config from backend once user is authenticated and set up
-  useEffect(() => {
-    if (!isAuthenticated || !profileChecked || !hasApiKey) return;
-    api('/api/github/config').then(cfg => {
-      if (cfg && !cfg.error) setGhConfig(prev => ({ ...prev, ...cfg }));
-    }).catch(() => {});
-  }, [isAuthenticated, profileChecked, hasApiKey]);
 
   if (isLoading) return (
     <div style={{ color: '#64748b', padding: '40px', fontFamily: 'IBM Plex Mono' }}>Loading…</div>
@@ -1008,19 +1021,32 @@ export default function ArchitectAI() {
     </div>
   );
 
-  function saveGhConfig(cfg) {
-    setGhConfig(cfg);
-    api('/api/github/config', 'PUT', cfg).catch(() => {});
+  async function saveGhCredentials() {
+    setGhSaving(true);
+    try {
+      const result = await api('/api/user/github', 'PUT', { githubToken: ghTokenInput, githubOwner: ghOwnerInput });
+      if (result.error) throw new Error(result.error);
+      if (ghOwnerInput) setGhOwner(ghOwnerInput);
+      if (ghTokenInput && ghTokenInput !== '••••••••') setGhHasToken(true);
+      setGhTokenInput('');
+      setGhMsg('GitHub credentials saved.');
+      setGhStatus('ok');
+    } catch (e) {
+      setGhStatus('error'); setGhMsg(e.message);
+    }
+    setGhSaving(false);
   }
 
-  async function ghPull() {
+  async function ghPull(targetRepo) {
+    const repo = targetRepo || repoName;
+    if (!repo) { setGhStatus('error'); setGhMsg('Enter a repo name to load.'); return; }
     setGhStatus('pulling'); setGhMsg('');
     try {
-      const data = await api('/api/github/pull', 'POST');
+      const data = await api('/api/github/pull', 'POST', { repoName: repo });
       if (data.error) throw new Error(data.error);
       if (!data.content) {
-        setGhMsg('ecosystem.json not found in repo — push will create it.');
-        setGhStatus('ok'); return;
+        setGhMsg('ecosystem.json not found in that repo.');
+        setGhStatus('error'); return;
       }
       const text = decodeURIComponent(escape(atob(data.content.replace(/\n/g, ''))));
       const parsed = JSON.parse(text);
@@ -1028,32 +1054,33 @@ export default function ArchitectAI() {
         setServices(parsed.services);
         if (parsed.project) setProjectName(parsed.project);
       }
-      setGhStatus('ok'); setGhMsg(`Pulled ${parsed.services?.length ?? 0} services from repo`);
+      setRepoName(repo);
+      setGhStatus('ok'); setGhMsg(`Loaded ${parsed.services?.length ?? 0} services from ${repo}`);
     } catch (e) {
       setGhStatus('error'); setGhMsg(e.message);
     }
   }
 
   async function ghPush() {
+    if (!repoName) { setGhStatus('error'); setGhMsg('No repo set — load an ecosystem or run implement first.'); return; }
     setGhStatus('pushing'); setGhMsg('');
     try {
-      const base = (ghConfig.path || 'ecosystem.json').replace(/ecosystem\.json$/, '');
       const files = [
-        { path: `${base}ecosystem.json`, content: genEcosystemJson(services, projectName) },
-        { path: `${base}spec.md`,        content: genSpecMd(services, projectName) },
-        { path: `${base}CLAUDE.md`,      content: genSpineClaudeMd(services, projectName) },
-        ...services.map(s => ({ path: `${base}${s.id}/CLAUDE.md`, content: genServiceClaudeMd(s, projectName) })),
+        { path: 'ecosystem.json', content: genEcosystemJson(services, projectName) },
+        { path: 'spec.md',        content: genSpecMd(services, projectName) },
+        { path: 'CLAUDE.md',      content: genSpineClaudeMd(services, projectName) },
+        ...services.map(s => ({ path: `${s.id}/CLAUDE.md`, content: genServiceClaudeMd(s, projectName) })),
       ];
-      const data = await api('/api/github/push', 'POST', { files });
+      const data = await api('/api/github/push', 'POST', { repoName, files });
       if (data.error) throw new Error(data.error);
       setGhStatus('ok');
-      setGhMsg(`Pushed ${data.results?.length ?? files.length} files to ${ghConfig.owner}/${ghConfig.repo}`);
+      setGhMsg(`Pushed ${data.results?.length ?? files.length} files to ${ghOwner}/${repoName}`);
     } catch (e) {
       setGhStatus('error'); setGhMsg(e.message);
     }
   }
 
-  const ghConnected = !!(ghConfig.token && ghConfig.owner && ghConfig.repo);
+  const ghConnected = ghHasToken && !!ghOwner && !!repoName;
 
   function toRepoName(name) {
     return name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') + '-services';
@@ -1061,29 +1088,23 @@ export default function ArchitectAI() {
 
   async function implement() {
     if (!services.length || implRunning) return;
-    // Implement only needs token + owner (repo name comes from the project name, not ghConfig.repo)
-    if (!ghConfig.token || !ghConfig.owner) {
-      const missing = [
-        !ghConfig.token && 'token (PAT)',
-        !ghConfig.owner && 'owner',
-      ].filter(Boolean).join(', ');
-      setImplLog([{ type: 'error', message: `GitHub not configured — missing: ${missing}. Open ⎔ and fill in all fields.` }]);
+    if (!ghHasToken || !ghOwner) {
+      setImplLog([{ type: 'error', message: 'GitHub not configured — open ⎔ and save your token and owner.' }]);
       setShowImplPanel(true);
       setShowGhPanel(true);
       return;
     }
-    const repoName = toRepoName(projectName);
+    const implRepoName = toRepoName(projectName);
 
     // Check whether the repo already exists before starting
     const createRes = await api('/api/github/create-repo', 'POST', {
-      repoName,
+      repoName: implRepoName,
       description: `${projectName} — generated by ArchitectAI`,
       private: false,
     });
 
     if (createRes.error && createRes.error.includes('already exists')) {
-      // Pause and ask the user before overwriting
-      setImplConfirm({ repoName });
+      setImplConfirm({ repoName: implRepoName });
       return;
     }
     if (createRes.error) {
@@ -1092,8 +1113,9 @@ export default function ArchitectAI() {
       return;
     }
 
+    setRepoName(implRepoName);
     setImplLog([{ type: 'start', message: `Repo created: ${createRes.repoUrl}` }]);
-    await runImplStream(repoName);
+    await runImplStream(implRepoName);
   }
 
   async function runImplStream(repoName) {
@@ -1109,7 +1131,7 @@ export default function ArchitectAI() {
 
     let succeeded = false;
     try {
-      const startRes = await api('/api/implement/start', 'POST', { repoName });
+      const startRes = await api('/api/implement/start', 'POST', { repoName, ecosystem: { projectName, services } });
       if (startRes.error) throw new Error(startRes.error);
       const { jobId } = startRes;
       implJobIdRef.current = jobId;
@@ -1334,13 +1356,13 @@ export default function ArchitectAI() {
           }
           {/* GitHub pull/push */}
           {ghConnected && <>
-            <button onClick={ghPull} disabled={ghStatus === 'pulling' || ghStatus === 'pushing'}
-              title={`Pull ecosystem.json from ${ghConfig.owner}/${ghConfig.repo}`}
+            <button onClick={() => ghPull(repoName)} disabled={ghStatus === 'pulling' || ghStatus === 'pushing'}
+              title={`Pull ecosystem.json from ${ghOwner}/${repoName}`}
               style={{ background: 'none', border: `1px solid ${C.border}`, borderRadius: '4px', color: ghStatus === 'pulling' ? C.amber : C.accentBr, cursor: 'pointer', fontSize: '11px', fontFamily: 'IBM Plex Mono', padding: '2px 9px' }}>
               {ghStatus === 'pulling' ? '…' : '↓ pull'}
             </button>
             <button onClick={ghPush} disabled={ghStatus === 'pulling' || ghStatus === 'pushing' || !services.length}
-              title={`Push ecosystem.json to ${ghConfig.owner}/${ghConfig.repo}`}
+              title={`Push ecosystem.json to ${ghOwner}/${repoName}`}
               style={{ background: 'none', border: `1px solid ${C.border}`, borderRadius: '4px', color: ghStatus === 'pushing' ? C.amber : C.green, cursor: 'pointer', fontSize: '11px', fontFamily: 'IBM Plex Mono', padding: '2px 9px' }}>
               {ghStatus === 'pushing' ? '…' : '↑ push'}
             </button>
@@ -1358,13 +1380,12 @@ export default function ArchitectAI() {
             ⚿
           </button>
           <button title="GitHub settings" onClick={() => setShowGhPanel(p => !p)}
-            style={{ background: showGhPanel ? C.card : 'none', border: `1px solid ${showGhPanel ? C.accentBr : C.border}`, borderRadius: '4px', color: ghConnected ? C.accentBr : C.dim, cursor: 'pointer', fontSize: '13px', fontFamily: 'IBM Plex Mono', padding: '2px 8px', lineHeight: 1 }}>
+            style={{ background: showGhPanel ? C.card : 'none', border: `1px solid ${showGhPanel ? C.accentBr : C.border}`, borderRadius: '4px', color: ghHasToken ? C.accentBr : C.dim, cursor: 'pointer', fontSize: '13px', fontFamily: 'IBM Plex Mono', padding: '2px 8px', lineHeight: 1 }}>
             ⎔
           </button>
           <button title="Reset ecosystem" onClick={() => {
             if (window.confirm('Clear all services and start over?')) {
-              setServices([]); setSelected(null);
-              api('/api/ecosystem', 'PUT', { services: [], projectName }).catch(() => {});
+              setServices([]); setSelected(null); setRepoName('');
             }
           }} style={{ background: 'none', border: `1px solid ${C.border}`, borderRadius: '4px', color: C.dim, cursor: 'pointer', fontSize: '11px', fontFamily: 'IBM Plex Mono', padding: '2px 8px' }}>
             ↺
@@ -1397,33 +1418,55 @@ export default function ArchitectAI() {
 
       {/* ── GitHub settings panel ── */}
       {showGhPanel && (
-        <div style={{ background: C.card, borderBottom: `1px solid ${C.border}`, padding: '14px 16px', display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'flex-end', flexShrink: 0 }}>
-          {[
-            { key: 'token',  label: 'PAT (token)',       type: 'password', placeholder: 'ghp_…',            width: '180px', required: true },
-            { key: 'owner',  label: 'Owner',             type: 'text',     placeholder: 'rkamradt',          width: '120px', required: true },
-            { key: 'repo',   label: 'Repo',              type: 'text',     placeholder: 'rkamradt-platform', width: '160px', required: true },
-            { key: 'branch', label: 'Branch',            type: 'text',     placeholder: 'main',              width: '90px'  },
-            { key: 'path',   label: 'File path',         type: 'text',     placeholder: 'ecosystem.json',    width: '140px' },
-          ].map(f => {
-            const isEmpty = f.required && !ghConfig[f.key];
-            return (
-              <label key={f.key} style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                <span style={{ color: isEmpty ? C.amber : C.dim, fontFamily: 'IBM Plex Mono', fontSize: '10px', fontWeight: '700', letterSpacing: '0.1em' }}>
-                  {f.label.toUpperCase()}{isEmpty ? ' ⚠' : ''}
-                </span>
-                <input type={f.type} value={ghConfig[f.key]} placeholder={f.placeholder}
-                  onChange={e => saveGhConfig({ ...ghConfig, [f.key]: e.target.value })}
-                  style={{ width: f.width, background: C.surface, border: `1px solid ${isEmpty ? C.amber + '88' : C.border}`, borderRadius: '4px', color: C.text, fontFamily: 'IBM Plex Mono', fontSize: '12px', padding: '5px 9px', outline: 'none' }} />
-              </label>
-            );
-          })}
-          <button onClick={() => { ghPull(); setShowGhPanel(false); }}
-            disabled={!ghConnected}
-            style={{ background: C.accentBr, border: 'none', borderRadius: '4px', color: '#fff', cursor: ghConnected ? 'pointer' : 'not-allowed', fontFamily: 'IBM Plex Mono', fontSize: '11px', fontWeight: '700', padding: '7px 16px', alignSelf: 'flex-end', opacity: ghConnected ? 1 : 0.45 }}>
-            CONNECT & PULL
-          </button>
-          <div style={{ width: '100%', color: C.dim, fontFamily: 'IBM Plex Mono', fontSize: '10px', marginTop: '4px' }}>
-            ⚠ PAT requires scopes: <strong style={{ color: C.muted }}>repo</strong> + <strong style={{ color: C.muted }}>workflow</strong> (needed to push GitHub Actions files)
+        <div style={{ background: C.card, borderBottom: `1px solid ${C.border}`, padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: '10px', flexShrink: 0 }}>
+          {/* Row 1: user-level credentials */}
+          <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'flex-end' }}>
+            <label style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+              <span style={{ color: !ghHasToken ? C.amber : C.dim, fontFamily: 'IBM Plex Mono', fontSize: '10px', fontWeight: '700', letterSpacing: '0.1em' }}>
+                PAT (TOKEN){!ghHasToken ? ' ⚠' : ' ✓'}
+              </span>
+              <input type="password" value={ghTokenInput} placeholder={ghHasToken ? '(stored — enter new to replace)' : 'ghp_…'}
+                onChange={e => setGhTokenInput(e.target.value)}
+                style={{ width: '220px', background: C.surface, border: `1px solid ${!ghHasToken ? C.amber + '88' : C.border}`, borderRadius: '4px', color: C.text, fontFamily: 'IBM Plex Mono', fontSize: '12px', padding: '5px 9px', outline: 'none' }} />
+            </label>
+            <label style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+              <span style={{ color: !ghOwnerInput ? C.amber : C.dim, fontFamily: 'IBM Plex Mono', fontSize: '10px', fontWeight: '700', letterSpacing: '0.1em' }}>
+                OWNER{!ghOwnerInput ? ' ⚠' : ''}
+              </span>
+              <input type="text" value={ghOwnerInput} placeholder="rkamradt"
+                onChange={e => setGhOwnerInput(e.target.value)}
+                style={{ width: '130px', background: C.surface, border: `1px solid ${!ghOwnerInput ? C.amber + '88' : C.border}`, borderRadius: '4px', color: C.text, fontFamily: 'IBM Plex Mono', fontSize: '12px', padding: '5px 9px', outline: 'none' }} />
+            </label>
+            <button onClick={saveGhCredentials} disabled={ghSaving || (!ghTokenInput && !ghOwnerInput)}
+              style={{ background: C.accentBr, border: 'none', borderRadius: '4px', color: '#fff', cursor: 'pointer', fontFamily: 'IBM Plex Mono', fontSize: '11px', fontWeight: '700', padding: '7px 16px', alignSelf: 'flex-end', opacity: (ghTokenInput || ghOwnerInput) ? 1 : 0.45 }}>
+              {ghSaving ? 'SAVING…' : 'SAVE CREDENTIALS'}
+            </button>
+          </div>
+          {/* Row 2: ecosystem repo */}
+          <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'flex-end' }}>
+            <label style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+              <span style={{ color: C.dim, fontFamily: 'IBM Plex Mono', fontSize: '10px', fontWeight: '700', letterSpacing: '0.1em' }}>REPO</span>
+              <input type="text" value={ghRepoInput} placeholder="my-project-services"
+                onChange={e => setGhRepoInput(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && ghPull(ghRepoInput)}
+                style={{ width: '200px', background: C.surface, border: `1px solid ${C.border}`, borderRadius: '4px', color: C.text, fontFamily: 'IBM Plex Mono', fontSize: '12px', padding: '5px 9px', outline: 'none' }} />
+            </label>
+            <button onClick={() => { ghPull(ghRepoInput); setShowGhPanel(false); }}
+              disabled={!ghHasToken || !ghOwner || !ghRepoInput || ghStatus === 'pulling'}
+              style={{ background: C.accentBr, border: 'none', borderRadius: '4px', color: '#fff', cursor: 'pointer', fontFamily: 'IBM Plex Mono', fontSize: '11px', fontWeight: '700', padding: '7px 16px', alignSelf: 'flex-end', opacity: (ghHasToken && ghOwner && ghRepoInput) ? 1 : 0.45 }}>
+              {ghStatus === 'pulling' ? 'LOADING…' : 'LOAD ECOSYSTEM'}
+            </button>
+            <button onClick={() => {
+              if (services.length && !window.confirm('Clear the current ecosystem and start fresh?')) return;
+              setServices([]); setProjectName('New Ecosystem'); setRepoName(''); setGhRepoInput(''); setSelected(null);
+              setMessages([{ role: 'assistant', content: "Welcome to **ArchitectAI**.\n\nDescribe what you're building and I'll help you design the services." }]);
+              setShowGhPanel(false);
+            }} style={{ background: 'none', border: `1px solid ${C.border}`, borderRadius: '4px', color: C.muted, cursor: 'pointer', fontFamily: 'IBM Plex Mono', fontSize: '11px', padding: '7px 14px', alignSelf: 'flex-end' }}>
+              NEW
+            </button>
+          </div>
+          <div style={{ color: C.dim, fontFamily: 'IBM Plex Mono', fontSize: '10px' }}>
+            ⚠ PAT requires scopes: <strong style={{ color: C.muted }}>repo</strong> + <strong style={{ color: C.muted }}>workflow</strong>
           </div>
         </div>
       )}
