@@ -1164,7 +1164,7 @@ export default function ArchitectAI() {
         services.forEach(s => { next[s.id] = 'building'; });
         return next;
       });
-      startBuildPolling(repoName);
+      startBuildPolling(repoName, { immediate: false });
     } else {
       setSvcStatuses(prev => {
         const next = { ...prev };
@@ -1181,12 +1181,12 @@ export default function ArchitectAI() {
     setImplLog(prev => [...prev, { type: 'info', message: 'Cancellation requested — stopping after current session' }]);
   }
 
-  function startBuildPolling(repoName) {
+  function startBuildPolling(repo, { immediate = false } = {}) {
     if (buildPollRef.current) clearInterval(buildPollRef.current);
 
     const poll = async () => {
       try {
-        const data = await api(`/api/github/actions-status?repoName=${encodeURIComponent(repoName)}`);
+        const data = await api(`/api/github/actions-status?repoName=${encodeURIComponent(repo)}`);
         if (data.error || !data.statuses) return;
 
         setSvcStatuses(prev => {
@@ -1197,14 +1197,12 @@ export default function ArchitectAI() {
           return next;
         });
 
-        // Check if all services have resolved
-        const currentStatuses = { ...svcStatuses, ...data.statuses };
         const allResolved = services.every(s => {
-          const st = (data.statuses[s.id]?.status) ?? svcStatuses[s.id];
+          const st = data.statuses[s.id]?.status ?? svcStatuses[s.id];
           return st === 'built' || st === 'build_failed';
         });
 
-        if (allResolved) {
+        if (allResolved && services.length > 0) {
           clearInterval(buildPollRef.current);
           buildPollRef.current = null;
 
@@ -1226,9 +1224,16 @@ export default function ArchitectAI() {
       } catch {}
     };
 
-    // First poll after 30s (give GitHub time to queue the runs)
+    if (immediate) poll();
     buildPollRef.current = setInterval(poll, 30000);
   }
+
+  // Auto-start build polling when the app loads with an existing repo
+  useEffect(() => {
+    if (!hydrated || !repoName || !services.length || implRunning) return;
+    startBuildPolling(repoName, { immediate: true });
+    return () => { if (buildPollRef.current) clearInterval(buildPollRef.current); };
+  }, [hydrated, repoName]);
 
   // Simple markdown renderer: **bold**, `code`, newlines
   function renderMd(text) {
@@ -1390,6 +1395,13 @@ export default function ArchitectAI() {
           }} style={{ background: 'none', border: `1px solid ${C.border}`, borderRadius: '4px', color: C.dim, cursor: 'pointer', fontSize: '11px', fontFamily: 'IBM Plex Mono', padding: '2px 8px' }}>
             ↺
           </button>
+          {repoName && !!services.length && !implRunning && (
+            <button onClick={() => startBuildPolling(repoName, { immediate: true })}
+              title={`Check build status for ${repoName}`}
+              style={{ background: 'none', border: `1px solid ${C.border}`, borderRadius: '4px', color: C.accentBr, cursor: 'pointer', fontSize: '11px', fontFamily: 'IBM Plex Mono', padding: '2px 8px' }}>
+              ⟳ builds
+            </button>
+          )}
           <button onClick={() => logout({ logoutParams: { returnTo: window.location.origin } })}
             style={{ background: 'none', border: `1px solid ${C.border}`, borderRadius: '4px', color: C.dim, cursor: 'pointer', fontSize: '11px', fontFamily: 'IBM Plex Mono', padding: '2px 8px' }}>
             sign out
