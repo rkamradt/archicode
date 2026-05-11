@@ -977,6 +977,13 @@ export default function ArchitectAI() {
     if (showImplPanel) implLogEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [implLog, showImplPanel]);
 
+  // Auto-start build polling when the app loads with an existing repo
+  // Must be declared before early returns to satisfy Rules of Hooks
+  useEffect(() => {
+    if (!hydrated || !repoName || !services.length || implRunning) return;
+    startBuildPolling(repoName, { immediate: true });
+    return () => { if (buildPollRef.current) clearInterval(buildPollRef.current); };
+  }, [hydrated, repoName]);
 
   if (isLoading) return (
     <div style={{ color: '#64748b', padding: '40px', fontFamily: 'IBM Plex Mono' }}>Loading…</div>
@@ -1228,12 +1235,6 @@ export default function ArchitectAI() {
     buildPollRef.current = setInterval(poll, 30000);
   }
 
-  // Auto-start build polling when the app loads with an existing repo
-  useEffect(() => {
-    if (!hydrated || !repoName || !services.length || implRunning) return;
-    startBuildPolling(repoName, { immediate: true });
-    return () => { if (buildPollRef.current) clearInterval(buildPollRef.current); };
-  }, [hydrated, repoName]);
 
   // Simple markdown renderer: **bold**, `code`, newlines
   function renderMd(text) {
