@@ -475,64 +475,71 @@ function DetailPanel({ service, onClose, onUpdate }) {
 }
 
 // ── Artifacts panel ───────────────────────────────────────────────────────────
-// Shows ecosystem.json (the source of truth the frontend owns).
-// All other generated files (spec.md, CLAUDE.md, service CLAUDE.md files) are
-// built server-side in buildPushFiles() when the user hits ↑ push.
+// Shows the services designed so far. All generated files (spec.md, CLAUDE.md,
+// ecosystem.json, per-service CLAUDE.md) are built server-side on ↑ push.
 function ExportPanel({ services, projectName }) {
-  const [copied, setCopied] = useState(false);
-
-  const content = JSON.stringify({ project: projectName, generated: new Date().toISOString(), services }, null, 2);
-
-  function copy() {
-    navigator.clipboard.writeText(content).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1800);
-    });
-  }
-
   if (!services.length) {
     return (
       <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: '12px', color: C.dim, fontFamily: 'IBM Plex Mono', fontSize: '12px' }}>
         <div style={{ fontSize: '36px', opacity: 0.2 }}>⬡</div>
-        <div>No services yet</div>
+        <div>No services yet — architect in the chat</div>
       </div>
     );
   }
 
   return (
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-      {/* File header */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 16px', background: C.card, borderBottom: `1px solid ${C.border}`, flexShrink: 0 }}>
-        <span style={{ color: C.muted, fontFamily: 'IBM Plex Mono', fontSize: '11px' }}>📄 ecosystem.json</span>
-        <button onClick={copy} style={{
-          background: copied ? C.green + '22' : C.surface,
-          border: `1px solid ${copied ? C.green + '55' : C.border}`,
-          borderRadius: '4px', padding: '4px 12px', cursor: 'pointer',
-          fontFamily: 'IBM Plex Mono', fontSize: '11px', fontWeight: '700',
-          color: copied ? C.green : C.muted, transition: 'all 0.15s',
-        }}>{copied ? '✓ COPIED' : 'COPY'}</button>
+      {/* Header */}
+      <div style={{ padding: '10px 16px', background: C.card, borderBottom: `1px solid ${C.border}`, flexShrink: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
+        <span style={{ color: C.muted, fontFamily: 'IBM Plex Mono', fontSize: '11px' }}>
+          {projectName} — {services.length} service{services.length !== 1 ? 's' : ''}
+        </span>
       </div>
 
-      {/* ecosystem.json content */}
-      <div style={{ flex: 1, overflow: 'auto', padding: '16px' }}>
-        <pre style={{ fontFamily: 'IBM Plex Mono, monospace', fontSize: '12px', lineHeight: '1.7', color: C.text, whiteSpace: 'pre-wrap', wordBreak: 'break-word', margin: 0 }}>
-          {content}
-        </pre>
+      {/* Service list */}
+      <div style={{ flex: 1, overflow: 'auto', padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+        {services.map(s => (
+          <div key={s.id} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: '6px', padding: '10px 14px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span style={{ color: ARCHETYPE_COLORS[s.archetype] || C.accentBr, fontFamily: 'IBM Plex Mono', fontSize: '10px', fontWeight: '700', letterSpacing: '0.1em' }}>
+                {archetypeLabel(s.archetype)}
+              </span>
+              <span style={{ color: C.text, fontFamily: 'IBM Plex Mono', fontSize: '13px', fontWeight: '700' }}>{s.name}</span>
+              <span style={{ color: C.dim, fontFamily: 'IBM Plex Mono', fontSize: '10px' }}>{s.id}</span>
+              {s.tech && <span style={{ color: techColor(s.tech), fontFamily: 'IBM Plex Mono', fontSize: '10px', marginLeft: 'auto' }}>{s.tech}</span>}
+            </div>
+            <div style={{ color: C.muted, fontFamily: 'IBM Plex Sans, sans-serif', fontSize: '12px', lineHeight: '1.5' }}>{s.purpose}</div>
+            {(s.apis?.length > 0 || s.events?.length > 0) && (
+              <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginTop: '2px' }}>
+                {s.apis?.map((a, i) => (
+                  <span key={i} style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: '3px', padding: '1px 6px', fontFamily: 'IBM Plex Mono', fontSize: '10px', color: C.accentGlow }}>
+                    {a.method} {a.path}
+                  </span>
+                ))}
+                {s.events?.map((e, i) => (
+                  <span key={i} style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: '3px', padding: '1px 6px', fontFamily: 'IBM Plex Mono', fontSize: '10px', color: e.direction === 'produces' ? C.green : C.amber }}>
+                    {e.direction === 'produces' ? '▶' : '◀'} {e.topic}
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+        ))}
       </div>
 
-      {/* Artifact descriptions */}
+      {/* Generated artifacts footer */}
       <div style={{ borderTop: `1px solid ${C.border}`, padding: '14px 16px', background: C.surface, flexShrink: 0 }}>
-        <div style={{ color: C.dim, fontFamily: 'IBM Plex Mono', fontSize: '10px', fontWeight: '700', letterSpacing: '0.14em', marginBottom: '10px' }}>GENERATED ON ↑ PUSH (server-side)</div>
+        <div style={{ color: C.dim, fontFamily: 'IBM Plex Mono', fontSize: '10px', fontWeight: '700', letterSpacing: '0.14em', marginBottom: '10px' }}>GENERATED ON ↑ PUSH</div>
         <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
           {[
-            ['spec.md',           'Human-readable living specification — describes every service, its APIs, events, and dependencies.'],
-            ['CLAUDE.md',         'Context file for Claude Code at the ecosystem root — links all services together for cross-cutting work.'],
-            ['ecosystem.json',    'Machine-readable service registry — used by ▶ implement to scaffold code and by ↓ pull to restore this view.'],
-            ['<id>/CLAUDE.md',    'Per-service context file for Claude Code — describes that service\'s purpose, APIs, events, and tech stack.'],
+            ['spec.md',        'Human-readable living specification'],
+            ['CLAUDE.md',      'Ecosystem context file for Claude Code'],
+            ['ecosystem.json', 'Machine-readable service registry'],
+            ['<id>/CLAUDE.md', 'Per-service context file for Claude Code'],
           ].map(([name, desc]) => (
-            <div key={name} style={{ display: 'flex', gap: '7px', alignItems: 'flex-start', background: C.card, borderRadius: '5px', padding: '7px 10px', flex: '1 1 45%', minWidth: '200px' }}>
+            <div key={name} style={{ display: 'flex', gap: '7px', alignItems: 'center', background: C.card, borderRadius: '5px', padding: '5px 10px', flex: '1 1 45%', minWidth: '180px' }}>
               <span style={{ color: C.accentBr, fontFamily: 'IBM Plex Mono', fontWeight: '700', fontSize: '11px', minWidth: '100px', flexShrink: 0 }}>{name}</span>
-              <span style={{ color: C.muted, fontFamily: 'IBM Plex Mono', fontSize: '11px', lineHeight: '1.5' }}>{desc}</span>
+              <span style={{ color: C.muted, fontFamily: 'IBM Plex Mono', fontSize: '11px' }}>{desc}</span>
             </div>
           ))}
         </div>
@@ -619,43 +626,39 @@ export default function ArchitectAI() {
     if (editingName) { nameRef.current?.focus(); nameRef.current?.select(); }
   }, [editingName]);
 
-  // ── Persist & hydrate (localStorage) ─────────────────────────────────────────
-  // GitHub is the primary save; localStorage is a best-effort session cache.
+  // ── Ecosystem scratch-pad (server-side) ──────────────────────────────────────
+  // Loaded from the API on login; saved back on every change (debounced).
+  // GitHub push/pull also update the scratch-pad on the server.
   const [hydrated, setHydrated] = useState(false);
-  const [repoName, setRepoName] = useState(''); // current ecosystem's GitHub repo
+  const [repoName, setRepoName] = useState('');
+  const saveEcosystemTimer = useRef(null);
 
   useEffect(() => {
     if (!isAuthenticated || !profileChecked || !hasApiKey) return;
-    try {
-      const cacheKey = user?.sub ? `architectai:${user.sub}` : null;
-      if (cacheKey) {
-        const cached = localStorage.getItem(cacheKey);
-        if (cached) {
-          const { projectName: pn, services: svc, repoName: rn } = JSON.parse(cached);
-          if (svc?.length)  setServices(svc);
-          if (pn)           setProjectName(pn);
-          if (rn)           setRepoName(rn);
-          if (svc?.length) {
-            setMessages([{ role: 'assistant', content:
-              `Welcome back to **ArchitectAI**.\n\n**${pn || 'Your ecosystem'}** has ${svc.length} service${svc.length === 1 ? '' : 's'} defined.\n\nNext steps:\n- **▶ implement** — scaffold all services and push code to GitHub\n- **↑ push** — commit the spec, CLAUDE.md, and ecosystem.json to your repo\n- Ask me to add or refine services, adjust APIs, or rethink boundaries`,
-            }]);
-          }
-        }
+    api('/api/ecosystem').then(data => {
+      if (data.services?.length) setServices(data.services);
+      if (data.projectName)      setProjectName(data.projectName);
+      if (data.repoName)         setRepoName(data.repoName);
+      if (data.services?.length) {
+        setMessages([{ role: 'assistant', content:
+          `Welcome back to **ArchitectAI**.\n\n**${data.projectName || 'Your ecosystem'}** has ${data.services.length} service${data.services.length === 1 ? '' : 's'} defined.\n\nNext steps:\n- **▶ implement** — scaffold all services and push code to GitHub\n- **↑ push** — commit the spec, CLAUDE.md, and ecosystem.json to your repo\n- Ask me to add or refine services, adjust APIs, or rethink boundaries`,
+        }]);
       }
-    } catch {}
-    setHydrated(true);
+      setHydrated(true);
+    }).catch(() => setHydrated(true));
   }, [isAuthenticated, profileChecked, hasApiKey]);
 
-  // Write to localStorage whenever ecosystem state changes
+  // Debounced save to server whenever ecosystem state changes
   useEffect(() => {
-    if (!hydrated || !user?.sub) return;
-    try {
-      localStorage.setItem(`architectai:${user.sub}`, JSON.stringify({ projectName, services, repoName, savedAt: Date.now() }));
-    } catch {}
+    if (!hydrated) return;
+    clearTimeout(saveEcosystemTimer.current);
+    saveEcosystemTimer.current = setTimeout(() => {
+      api('/api/ecosystem', 'PUT', { projectName, services, repoName }).catch(() => {});
+    }, 800);
   }, [services, projectName, repoName, hydrated]);
 
   // ── GitHub integration ────────────────────────────────────────────────────────
-  // Token + owner are user-level (server-side). Repo is ecosystem-level (localStorage).
+  // Token + owner are user-level (server-side). Repo is ecosystem-level (server-side).
   // ⎔ panel inputs (local form state, not auto-saved)
   const [ghTokenInput, setGhTokenInput] = useState('');
   const [ghOwnerInput, setGhOwnerInput] = useState('');
@@ -778,13 +781,12 @@ export default function ArchitectAI() {
   }
 
   async function ghPush() {
-    if (!repoName) { setGhStatus('error'); setGhMsg('No repo set — load an ecosystem or run implement first.'); return; }
     setGhStatus('pushing'); setGhMsg('');
     try {
-      const data = await api('/api/github/push', 'POST', { repoName, ecosystem: { projectName, services } });
+      const data = await api('/api/github/push', 'POST');
       if (data.error) throw new Error(data.error);
       setGhStatus('ok');
-      setGhMsg(`Pushed ${data.results?.length ?? 0} files to ${ghOwner}/${repoName}`);
+      setGhMsg(`Pushed ${data.results?.length ?? 0} files to ${ghOwner}/${data.repoName || repoName}`);
     } catch (e) {
       setGhStatus('error'); setGhMsg(e.message);
     }
@@ -824,11 +826,13 @@ export default function ArchitectAI() {
     }
 
     setRepoName(implRepoName);
+    // Persist the new repoName to the server scratch-pad before the agent reads it
+    await api('/api/ecosystem', 'PUT', { projectName, services, repoName: implRepoName }).catch(() => {});
     setImplLog([{ type: 'start', message: `Repo created: ${createRes.repoUrl}` }]);
-    await runImplStream(implRepoName);
+    await runImplStream();
   }
 
-  async function runImplStream(repoName) {
+  async function runImplStream() {
     setImplRunning(true);
     setShowImplPanel(true);
 
@@ -841,7 +845,7 @@ export default function ArchitectAI() {
 
     let succeeded = false;
     try {
-      const startRes = await api('/api/implement/start', 'POST', { repoName, ecosystem: { projectName, services } });
+      const startRes = await api('/api/implement/start', 'POST');
       if (startRes.error) throw new Error(startRes.error);
       const { jobId } = startRes;
       implJobIdRef.current = jobId;
@@ -1473,11 +1477,13 @@ export default function ArchitectAI() {
                 style={{ background: 'none', border: `1px solid ${C.border}`, borderRadius: '4px', color: C.muted, cursor: 'pointer', fontFamily: 'IBM Plex Mono', fontSize: '11px', fontWeight: '700', padding: '7px 18px' }}>
                 CANCEL
               </button>
-              <button onClick={() => {
-                const { repoName } = implConfirm;
+              <button onClick={async () => {
+                const { repoName: confirmedRepo } = implConfirm;
                 setImplConfirm(null);
-                setImplLog([{ type: 'info', message: `Repo ${repoName} already exists — overwriting` }]);
-                runImplStream(repoName);
+                setRepoName(confirmedRepo);
+                await api('/api/ecosystem', 'PUT', { projectName, services, repoName: confirmedRepo }).catch(() => {});
+                setImplLog([{ type: 'info', message: `Repo ${confirmedRepo} already exists — overwriting` }]);
+                runImplStream();
               }}
                 style={{ background: C.amber + '22', border: `1px solid ${C.amber + '66'}`, borderRadius: '4px', color: C.amber, cursor: 'pointer', fontFamily: 'IBM Plex Mono', fontSize: '11px', fontWeight: '700', padding: '7px 18px' }}>
                 CONTINUE
