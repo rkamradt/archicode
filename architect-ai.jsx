@@ -854,12 +854,15 @@ export default function ArchitectAI() {
   const [ghHasToken, setGhHasToken] = useState(false);
   const [ghOwner, setGhOwner]       = useState('');
 
+  const [anthropicModel, setAnthropicModel] = useState('');
+
   useEffect(() => {
     if (!isAuthenticated) return;
     api('/api/user/profile').then(data => {
       setHasApiKey(!!data.hasApiKey);
       setGhHasToken(!!data.hasGithubToken);
       setGhOwner(data.githubOwner || '');
+      if (data.anthropicModel) setAnthropicModel(data.anthropicModel);
       setProfileChecked(true);
     }).catch(() => setProfileChecked(true));
   }, [isAuthenticated]);
@@ -1051,18 +1054,10 @@ export default function ArchitectAI() {
     try {
       const data = await api('/api/github/pull', 'POST', { repoName: repo });
       if (data.error) throw new Error(data.error);
-      if (!data.content) {
-        setGhMsg('ecosystem.json not found in that repo.');
-        setGhStatus('error'); return;
-      }
-      const text = decodeURIComponent(escape(atob(data.content.replace(/\n/g, ''))));
-      const parsed = JSON.parse(text);
-      if (parsed.services) {
-        setServices(parsed.services);
-        if (parsed.project) setProjectName(parsed.project);
-      }
+      setServices(data.services || []);
+      if (data.projectName) setProjectName(data.projectName);
       setRepoName(repo);
-      setGhStatus('ok'); setGhMsg(`Loaded ${parsed.services?.length ?? 0} services from ${repo}`);
+      setGhStatus('ok'); setGhMsg(`Loaded ${data.services?.length ?? 0} services from ${repo}`);
     } catch (e) {
       setGhStatus('error'); setGhMsg(e.message);
     }
@@ -1072,16 +1067,10 @@ export default function ArchitectAI() {
     if (!repoName) { setGhStatus('error'); setGhMsg('No repo set — load an ecosystem or run implement first.'); return; }
     setGhStatus('pushing'); setGhMsg('');
     try {
-      const files = [
-        { path: 'ecosystem.json', content: genEcosystemJson(services, projectName) },
-        { path: 'spec.md',        content: genSpecMd(services, projectName) },
-        { path: 'CLAUDE.md',      content: genSpineClaudeMd(services, projectName) },
-        ...services.map(s => ({ path: `${s.id}/CLAUDE.md`, content: genServiceClaudeMd(s, projectName) })),
-      ];
-      const data = await api('/api/github/push', 'POST', { repoName, files });
+      const data = await api('/api/github/push', 'POST', { repoName, ecosystem: { projectName, services } });
       if (data.error) throw new Error(data.error);
       setGhStatus('ok');
-      setGhMsg(`Pushed ${data.results?.length ?? files.length} files to ${ghOwner}/${repoName}`);
+      setGhMsg(`Pushed ${data.results?.length ?? 0} files to ${ghOwner}/${repoName}`);
     } catch (e) {
       setGhStatus('error'); setGhMsg(e.message);
     }
@@ -1269,7 +1258,6 @@ export default function ArchitectAI() {
 
     try {
       const data = await api('/api/messages', 'POST', {
-        model: 'claude-sonnet-4-20250514',
         max_tokens: 2048,
         system: buildPrompt(services),
         messages: apiHistory,
