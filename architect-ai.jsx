@@ -63,67 +63,7 @@ function applyArchetypeSuffix(id, name, archetype) {
   return { id, name };
 }
 
-// ── Ecosystem update parsing ──────────────────────────────────────────────────
-function parseUpdates(text) {
-  const out = [];
-  const re = /<ecosystem_update>([\s\S]*?)<\/ecosystem_update>/g;
-  let m;
-  while ((m = re.exec(text)) !== null) {
-    try { out.push(JSON.parse(m[1].trim())); } catch {}
-  }
-  return out;
-}
-
-function stripTags(text) {
-  return text.replace(/<ecosystem_update>[\s\S]*?<\/ecosystem_update>/g, '').trim();
-}
-
-// ── System prompt ─────────────────────────────────────────────────────────────
-function buildPrompt(services) {
-  return `You are ArchitectAI — a senior software architect specializing in microservices, event-driven systems, and distributed architecture.
-
-Your expertise includes: service decomposition and bounded contexts (DDD), REST/gRPC/GraphQL API design, event-driven patterns (Kafka, CQRS, event sourcing, Saga), resilience patterns (circuit breaker, bulkhead, retry with backoff), service mesh, distributed tracing, data ownership and consistency boundaries, Kubernetes, AWS, and GitOps/ArgoCD deployment.
-
-Current ecosystem state:
-${services.length === 0
-  ? '(empty — no services defined yet)'
-  : JSON.stringify(services, null, 2)}
-
-When the user has agreed to add or update a service, emit EXACTLY this JSON block — no prose inside the tags:
-<ecosystem_update>
-{"action":"add","service":{"id":"kebab-case-id","name":"ServiceName","purpose":"One sentence: what this service owns and is responsible for","tech":"Spring Boot","archetype":"http","apis":[{"method":"POST","path":"/path","description":"what this endpoint does"}],"events":[{"direction":"produces","topic":"domain.event.name","description":"what payload this carries"}],"dependencies":["other-service-id"]}}
-</ecosystem_update>
-
-Emit ecosystem_update ONLY when formalizing agreed services — not speculatively during discussion.
-Use "action": "add", "update", or "remove" as appropriate.
-
-## Service archetypes
-
-Every service must have one of these archetypes — choose the one that best describes its primary role:
-
-- **http** — Standard REST/gRPC service with its own API surface and data store. No naming suffix required.
-- **messaging** — Primarily event-driven; publishes and/or subscribes to topics. No naming suffix required.
-- **provider** — Wraps a third-party or external API, exposing it to the ecosystem. The service id MUST end in \`-provider\` and the name MUST end in \`Provider\`. Include a \`foreignApi\` block: \`{"name":"...","baseUrl":"...","authMethod":"apiKey|oauth2|basic","generateMock":true}\`.
-- **adaptor** — Bridges a foreign protocol or data format into the ecosystem. The service id MUST end in \`-adaptor\` and the name MUST end in \`Adaptor\`. Include an \`accepts\` block: \`{"protocol":"...","format":"...","foreignEntity":"...","generateMock":true,"mockBehavior":"..."}\`.
-
-Provider example:
-<ecosystem_update>
-{"action":"add","service":{"id":"stripe-provider","name":"StripeProvider","purpose":"Wraps the Stripe payments API, exposing charge and refund operations to the ecosystem","tech":"Node.js/Express","archetype":"provider","foreignApi":{"name":"Stripe","baseUrl":"https://api.stripe.com","authMethod":"apiKey","generateMock":true},"apis":[{"method":"POST","path":"/charges","description":"Create a charge via Stripe"}],"events":[{"direction":"produces","topic":"payment.charged","description":"Emitted when a charge succeeds"}],"dependencies":[]}}
-</ecosystem_update>
-
-Adaptor example:
-<ecosystem_update>
-{"action":"add","service":{"id":"sftp-adaptor","name":"SftpAdaptor","purpose":"Polls an SFTP server for CSV files and emits structured events","tech":"Node.js/Express","archetype":"adaptor","accepts":{"protocol":"SFTP","format":"CSV","foreignEntity":"OrderExport","generateMock":true,"mockBehavior":"Emit one order.received event per CSV row"},"apis":[],"events":[{"direction":"produces","topic":"order.received","description":"Emitted for each row in an ingested CSV file"}],"dependencies":[]}}
-</ecosystem_update>
-
-Architectural principles to uphold:
-- Single responsibility: each service owns one bounded context
-- No shared databases between services
-- Flag circular dependencies, chatty inter-service calls, data ownership violations
-- Prefer async event-driven communication for cross-domain concerns
-- Recommend specific patterns, not "it depends" hedging
-- Call out when a proposed service is too broad or could be split`;
-}
+// ── System prompt, update parsing, and strip logic live in server.js ──────────
 
 // ── Topology SVG ──────────────────────────────────────────────────────────────
 function Topology({ services, onSelect }) {
@@ -975,20 +915,13 @@ export default function ArchitectAI() {
     }
 
     try {
-      const data = await api('/api/messages', 'POST', {
-        max_tokens: 2048,
-        system: buildPrompt(services),
-        messages: apiHistory,
-      });
-      if (data.error) throw new Error(data.error.message);
+      const data = await api('/api/messages', 'POST', { messages: apiHistory });
+      if (data.error) throw new Error(data.error.message || data.error);
 
-      const raw = data.content?.map(b => b.text || '').join('') || '';
-      const updates = parseUpdates(raw);
-
-      if (updates.length) {
+      if (data.updates?.length) {
         setServices(prev => {
           let next = [...prev];
-          for (const u of updates) {
+          for (const u of data.updates) {
             if (!u.service) continue;
             const idx = next.findIndex(s => s.id === u.service.id);
             if (u.action === 'remove') {
@@ -1002,11 +935,10 @@ export default function ArchitectAI() {
         });
       }
 
-      const display = stripTags(raw);
       setMessages(prev => [...prev, {
         role: 'assistant',
-        content: display,
-        added: updates.length ? updates.map(u => u.service?.name).filter(Boolean) : null,
+        content: data.content || '',
+        added: data.updates?.length ? data.updates.map(u => u.service?.name).filter(Boolean) : null,
       }]);
     } catch (e) {
       setMessages(prev => [...prev, { role: 'assistant', content: `Error: ${e.message}` }]);
