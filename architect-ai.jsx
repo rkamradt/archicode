@@ -469,7 +469,7 @@ function ExportPanel({ services, projectName }) {
 
       {/* Generated artifacts footer */}
       <div style={{ borderTop: `1px solid ${C.border}`, padding: '14px 16px', background: C.surface, flexShrink: 0 }}>
-        <div style={{ color: C.dim, fontFamily: 'IBM Plex Mono', fontSize: '10px', fontWeight: '700', letterSpacing: '0.14em', marginBottom: '10px' }}>GENERATED ON ↑ PUSH</div>
+        <div style={{ color: C.dim, fontFamily: 'IBM Plex Mono', fontSize: '10px', fontWeight: '700', letterSpacing: '0.14em', marginBottom: '10px' }}>PUBLISHED TO GITHUB ON PUSH</div>
         <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
           {[
             ['spec.md',        'Human-readable living specification'],
@@ -581,7 +581,7 @@ export default function ArchitectAI() {
       if (data.repoName)         setRepoName(data.repoName);
       if (data.services?.length) {
         setMessages([{ role: 'assistant', content:
-          `Welcome back to **ArchitectAI**.\n\n**${data.projectName || 'Your ecosystem'}** has ${data.services.length} service${data.services.length === 1 ? '' : 's'} defined.\n\nNext steps:\n- **▶ implement** — scaffold all services and push code to GitHub\n- **↑ push** — commit the spec, CLAUDE.md, and ecosystem.json to your repo\n- Ask me to add or refine services, adjust APIs, or rethink boundaries`,
+          `Welcome back to **ArchitectAI**.\n\n**${data.projectName || 'Your ecosystem'}** has ${data.services.length} service${data.services.length === 1 ? '' : 's'} defined.\n\nNext steps:\n- **▶ implement** — scaffold all services and push code to GitHub\n- Ask me to add or refine services, adjust APIs, or rethink boundaries`,
         }]);
       }
       setHydrated(true);
