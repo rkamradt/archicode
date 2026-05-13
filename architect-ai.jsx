@@ -883,16 +883,24 @@ export default function ArchitectAI() {
   }
 
 
-  // Simple markdown renderer: **bold**, `code`, newlines
+  // Simple markdown renderer: fenced code blocks, **bold**, `code`, newlines
   function renderMd(text) {
-    return text.split(/(\*\*[^*]+\*\*|`[^`]+`)/).map((p, i) => {
-      if (p.startsWith('**') && p.endsWith('**'))
-        return <strong key={i} style={{ color: C.text }}>{p.slice(2, -2)}</strong>;
-      if (p.startsWith('`') && p.endsWith('`'))
-        return <code key={i} style={{ fontFamily: 'IBM Plex Mono, monospace', background: C.bg, padding: '1px 5px', borderRadius: '3px', fontSize: '12px', color: C.accentGlow }}>{p.slice(1, -1)}</code>;
-      return p.split('\n').flatMap((line, j, arr) =>
-        j < arr.length - 1 ? [line, <br key={`${i}-${j}`} />] : [line]
-      );
+    // Split on triple-backtick fenced blocks first
+    return text.split(/(```[\s\S]*?```)/g).flatMap((part, i) => {
+      if (part.startsWith('```') && part.endsWith('```')) {
+        const inner = part.slice(3, -3).replace(/^[a-z]*\n/, ''); // strip language tag
+        return [<pre key={i} style={{ fontFamily: 'IBM Plex Mono, monospace', background: C.bg, border: `1px solid ${C.border}`, borderRadius: '5px', padding: '10px 12px', fontSize: '11px', lineHeight: '1.6', color: C.accentGlow, overflowX: 'auto', margin: '6px 0', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>{inner}</pre>];
+      }
+      // Inline: **bold** and `code`
+      return part.split(/(\*\*[^*]+\*\*|`[^`]+`)/).map((p, j) => {
+        if (p.startsWith('**') && p.endsWith('**'))
+          return <strong key={`${i}-${j}`} style={{ color: C.text }}>{p.slice(2, -2)}</strong>;
+        if (p.startsWith('`') && p.endsWith('`'))
+          return <code key={`${i}-${j}`} style={{ fontFamily: 'IBM Plex Mono, monospace', background: C.bg, padding: '1px 5px', borderRadius: '3px', fontSize: '12px', color: C.accentGlow }}>{p.slice(1, -1)}</code>;
+        return p.split('\n').flatMap((line, k, arr) =>
+          k < arr.length - 1 ? [line, <br key={`${i}-${j}-${k}`} />] : [line]
+        );
+      });
     });
   }
 
