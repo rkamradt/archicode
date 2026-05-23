@@ -1,7 +1,8 @@
 'use strict';
 
-const express         = require('express');
-const { MongoClient } = require('mongodb');
+const express            = require('express');
+const { MongoClient }    = require('mongodb');
+const { startConsumer, setDb } = require('./consumer');
 
 const app = express();
 app.use(express.json());
@@ -20,6 +21,8 @@ function connectMongo() {
       db = client.db('architectai');
       dbReady = true;
       console.log('MongoDB connected');
+      setDb(db);
+      startConsumer().catch(err => console.error('Consumer start failed:', err.message));
     })
     .catch(err => {
       console.error('MongoDB connection failed:', err.message);
