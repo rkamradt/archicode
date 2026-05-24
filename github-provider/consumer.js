@@ -110,6 +110,62 @@ async function fetchArtifact(objectKey, buildId) {
   return files;
 }
 
+// ── Step 2b — Inject GitHub Actions workflows ─────────────────────────────────
+// Detects service IDs from top-level directories in the unpacked zip and injects
+// a .github/workflows/{serviceId}.yml for each one. This is the ONLY place in the
+// system that knows about GitHub Actions YAML structure — swapping to a different
+// CI system means replacing this function only.
+function injectWorkflows(files, owner, repoName) {
+  const serviceIds = [...new Set(
+    files
+      .map(f => f.path.split('/')[0])
+      .filter(d => d && !d.startsWith('.')),
+  )];
+
+  for (const serviceId of serviceIds) {
+    const workflowPath = `.github/workflows/${serviceId}.yml`;
+    // Skip if a workflow was already included in the artifact
+    if (files.some(f => f.path === workflowPath)) continue;
+
+    const content = `name: Build ${serviceId}
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '${serviceId}/**'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: \${{ github.actor }}
+          password: \${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: ./${serviceId}
+          push: true
+          tags: ghcr.io/${owner}/${repoName}/${serviceId}:main
+`;
+    files.push({ path: workflowPath, content });
+  }
+
+  return serviceIds;
+}
+
 // ── Step 3 — Push files to GitHub ─────────────────────────────────────────────
 // Fetches each file's SHA before writing so repeated runs are idempotent.
 // Collects failures but continues; caller decides the failure threshold.
@@ -243,6 +299,10 @@ async function handleCodeGenerated(event) {
     await publishFailed(buildId, userId, `Artifact fetch failed: ${err.message}`);
     return;
   }
+
+  // Step 2b — Inject CI workflows for each detected service
+  const injectedServices = injectWorkflows(files, creds.owner, repoName);
+  log(`[${buildId}] Injected ${injectedServices.length} GitHub Actions workflow(s): ${injectedServices.join(', ')}`);
 
   // Step 3 — Push files to GitHub
   let failures;
