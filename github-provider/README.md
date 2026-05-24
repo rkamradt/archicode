@@ -91,7 +91,7 @@ kubectl create secret generic github-provider-secrets \
   --from-literal=MINIO_ACCESS_KEY=<key> \
   --from-literal=MINIO_SECRET_KEY=<secret> \
   --from-literal=MINIO_BUCKET=architectai-builds \
-  --from-literal=MONGODB_URI=mongodb://mongodb.mongodb:27017/architectai \
+  --from-literal=MONGODB_URI=mongodb://<user>:<password>@mongodb.mongodb:27017/architectai \
   --from-literal=GITHUB_POLL_INTERVAL_MS=10000 \
   --from-literal=GITHUB_MAX_POLL_ATTEMPTS=30
 ```
