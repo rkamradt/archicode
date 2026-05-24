@@ -64,26 +64,41 @@ async function publishStatus(buildId, attempt, pipelineUrl) {
 
 // ── Step 1 — Create GitHub repo ───────────────────────────────────────────────
 async function createRepo(creds, repoName, buildId) {
+  const headers = {
+    Authorization:  `Bearer ${creds.token}`,
+    Accept:         'application/vnd.github.v3+json',
+    'Content-Type': 'application/json',
+  };
+
   const res = await fetch('https://api.github.com/user/repos', {
     method:  'POST',
-    headers: {
-      Authorization:  `Bearer ${creds.token}`,
-      Accept:         'application/vnd.github.v3+json',
-      'Content-Type': 'application/json',
-    },
+    headers,
     body: JSON.stringify({ name: repoName, private: false, auto_init: true }),
   });
 
   if (res.status === 422) {
-    // Repo already exists — idempotent, treat as success
     log(`[${buildId}] Repo ${creds.owner}/${repoName} already exists — continuing`);
-    return;
-  }
-  if (!res.ok) {
+  } else if (!res.ok) {
     const data = await res.json().catch(() => ({}));
     throw new Error(`GitHub create-repo HTTP ${res.status}: ${data.message || 'unknown error'}`);
+  } else {
+    log(`[${buildId}] Created repo ${creds.owner}/${repoName}`);
   }
-  log(`[${buildId}] Created repo ${creds.owner}/${repoName}`);
+
+  // Ensure GitHub Actions is enabled — may be off by default depending on org settings
+  const actionsRes = await fetch(
+    `https://api.github.com/repos/${creds.owner}/${repoName}/actions/permissions`,
+    {
+      method:  'PUT',
+      headers,
+      body:    JSON.stringify({ enabled: true, allowed_actions: 'all' }),
+    },
+  );
+  if (!actionsRes.ok) {
+    const data = await actionsRes.json().catch(() => ({}));
+    throw new Error(`GitHub enable-actions HTTP ${actionsRes.status}: ${data.message || 'unknown error'}`);
+  }
+  log(`[${buildId}] GitHub Actions enabled on ${creds.owner}/${repoName}`);
 }
 
 // ── Step 2 — Fetch artifact from MinIO ───────────────────────────────────────
