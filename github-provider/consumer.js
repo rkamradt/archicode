@@ -257,6 +257,37 @@ async function waitForPipeline(creds, repoName, buildId) {
   return { success: false, run: null, timedOut: true };
 }
 
+// ── Step 4b — Trigger workflow_dispatch for each injected workflow ────────────
+// GitHub does not run a workflow on the push that first creates it, so we
+// explicitly dispatch each one after the push. Requires the PAT to have the
+// `workflow` scope.
+async function triggerWorkflows(creds, repoName, serviceIds, buildId) {
+  const headers = {
+    Authorization:  `Bearer ${creds.token}`,
+    Accept:         'application/vnd.github.v3+json',
+    'Content-Type': 'application/json',
+  };
+
+  // Give GitHub a moment to register the newly-pushed workflow files
+  await new Promise(r => setTimeout(r, 3000));
+
+  for (const serviceId of serviceIds) {
+    const workflowFile = `${serviceId}.yml`;
+    const url = `https://api.github.com/repos/${creds.owner}/${repoName}/actions/workflows/${workflowFile}/dispatches`;
+    const res = await fetch(url, {
+      method:  'POST',
+      headers,
+      body:    JSON.stringify({ ref: 'main' }),
+    });
+    if (res.status === 204) {
+      log(`[${buildId}] Triggered workflow_dispatch for ${workflowFile}`);
+    } else {
+      const data = await res.json().catch(() => ({}));
+      log(`[${buildId}] Warning: could not trigger ${workflowFile} HTTP ${res.status}: ${data.message || 'unknown'}`);
+    }
+  }
+}
+
 // ── Step 5 — Extract image references ─────────────────────────────────────────
 // Convention fallback: ghcr.io/{owner}/{repoName}/{serviceId}:main
 // Service IDs are inferred from top-level directory names in the unpacked zip.
@@ -312,6 +343,16 @@ async function handleCodeGenerated(event) {
     await publishFailed(buildId, userId, `File push failed: ${err.message}`);
     return;
   }
+  // Workflow files failing to push means the PAT lacks the `workflow` scope —
+  // there is no point proceeding since no pipeline will ever run.
+  const workflowFailures = failures.filter(f => f.path.startsWith('.github/workflows/'));
+  if (workflowFailures.length > 0) {
+    const detail = workflowFailures.map(f => `${f.path}: ${f.error}`).join('; ');
+    await publishFailed(buildId, userId,
+      `Workflow files could not be pushed (PAT may be missing the 'workflow' scope): ${detail}`);
+    return;
+  }
+
   const failRate = files.length > 0 ? failures.length / files.length : 0;
   if (failRate > 0.2) {
     const detail = failures.slice(0, 5).map(f => `${f.path}: ${f.error}`).join('; ');
@@ -321,6 +362,15 @@ async function handleCodeGenerated(event) {
   }
   if (failures.length > 0) {
     log(`[${buildId}] ${failures.length} non-fatal push failures — continuing`);
+  }
+
+  // Step 3b — Trigger workflow_dispatch (GitHub won't auto-run a workflow on the
+  // push that first creates it)
+  try {
+    await triggerWorkflows(creds, repoName, injectedServices, buildId);
+  } catch (err) {
+    await publishFailed(buildId, userId, `Workflow dispatch failed: ${err.message}`);
+    return;
   }
 
   // Step 4 — Wait for GitHub Actions pipeline
