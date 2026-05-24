@@ -9,19 +9,24 @@
  * 4. Subscribes to architectai.build.complete and architectai.build.failed
  * 5. Waits up to WAIT_TIMEOUT_MS for a terminal event, then exits
  *
- * Usage:
- *   node -r dotenv/config smoke-test.js
- *   REPO_NAME=my-test-repo node -r dotenv/config smoke-test.js
+ * Usage (local, with Kafka + MinIO port-forwarded):
+ *   npm run smoke
  *
- * Required env (same as github-provider .env.local):
- *   KAFKA_BROKERS, MINIO_ENDPOINT, MINIO_ACCESS_KEY, MINIO_SECRET_KEY,
- *   MINIO_BUCKET (optional, defaults to architectai-builds)
+ *   kubectl port-forward -n kafka  svc/kafka  9092:9092
+ *   kubectl port-forward -n minio  svc/minio  9000:9000
+ *   kubectl port-forward -n mongodb svc/mongodb 27017:27017
  *
- * The test user must already have githubToken and githubOwner set in MongoDB.
- * Set TEST_USER_ID to the Auth0 sub of that user (default: smoke-test-user).
+ * Config (.env.local):
+ *   MINIO_ACCESS_KEY, MINIO_SECRET_KEY  — required; match your MinIO deployment
+ *   TEST_USER_ID                        — Auth0 sub of a user with githubToken in MongoDB
+ *   REPO_NAME                           — override the auto-generated repo name
+ *   WAIT_TIMEOUT_MS                     — how long to wait (default 300000 = 5 min)
+ *
+ * All other values default to localhost port-forwarded addresses.
  */
 
-require('dotenv').config();
+// Load .env.local for local dev (gitignored); silently skip if absent.
+require('dotenv').config({ path: require('path').join(__dirname, '.env.local') });
 
 const { Kafka }       = require('kafkajs');
 const AdmZip          = require('adm-zip');
@@ -35,7 +40,7 @@ const crypto = require('crypto');
 
 // ── Config ─────────────────────────────────────────────────────────────────────
 const BUILD_ID        = `smoke-${crypto.randomBytes(4).toString('hex')}`;
-const USER_ID         = process.env.TEST_USER_ID   || 'smoke-test-user';
+const USER_ID         = process.env.TEST_USER_ID   || (() => { throw new Error('TEST_USER_ID is required — set it in .env.local to the Auth0 sub of a user with GitHub creds in MongoDB'); })();
 const REPO_NAME       = process.env.REPO_NAME      || `smoke-test-${BUILD_ID}`;
 const BUCKET          = process.env.MINIO_BUCKET   || 'architectai-builds';
 const WAIT_TIMEOUT_MS = parseInt(process.env.WAIT_TIMEOUT_MS || '300000', 10); // 5 min default
@@ -43,17 +48,17 @@ const OBJECT_KEY      = `builds/${BUILD_ID}.zip`;
 
 // ── MinIO ──────────────────────────────────────────────────────────────────────
 const s3 = new S3Client({
-  endpoint:    process.env.MINIO_ENDPOINT,
+  endpoint:    process.env.MINIO_ENDPOINT    || 'http://localhost:9000',
   region:      'us-east-1',
   credentials: {
-    accessKeyId:     process.env.MINIO_ACCESS_KEY,
-    secretAccessKey: process.env.MINIO_SECRET_KEY,
+    accessKeyId:     process.env.MINIO_ACCESS_KEY || (() => { throw new Error('MINIO_ACCESS_KEY is required'); })(),
+    secretAccessKey: process.env.MINIO_SECRET_KEY || (() => { throw new Error('MINIO_SECRET_KEY is required'); })(),
   },
   forcePathStyle: true,
 });
 
 // ── Kafka ──────────────────────────────────────────────────────────────────────
-const kafka   = new Kafka({ clientId: 'smoke-test', brokers: (process.env.KAFKA_BROKERS || 'localhost:9092').split(',') });
+const kafka = new Kafka({ clientId: 'smoke-test', brokers: (process.env.KAFKA_BROKERS || 'localhost:9092').split(',') });
 const producer = kafka.producer();
 const consumer = kafka.consumer({ groupId: `smoke-test-${BUILD_ID}` });
 

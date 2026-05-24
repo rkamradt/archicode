@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node -r dotenv/config server.js",
-    "smoke": "node -r dotenv/config smoke-test.js"
+    "smoke": "node smoke-test.js"
   },
   "dependencies": {
     "express": "^4.18.2",
