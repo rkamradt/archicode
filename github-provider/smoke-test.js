@@ -14,7 +14,9 @@
  *
  *   kubectl port-forward -n kafka  svc/kafka  9092:9092
  *   kubectl port-forward -n minio  svc/minio  9000:9000
- *   kubectl port-forward -n mongodb svc/mongodb 27017:27017
+ *
+ * github-provider does not need to run locally — the cluster instance
+ * consumes the Kafka event and handles the build.
  *
  * Config (.env.local):
  *   MINIO_ACCESS_KEY, MINIO_SECRET_KEY  — required; match your MinIO deployment
