@@ -5,7 +5,7 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "node -r dotenv/config server.js",
+    "dev": "node server.js",
     "smoke": "node smoke-test.js"
   },
   "dependencies": {

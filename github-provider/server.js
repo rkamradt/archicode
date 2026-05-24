@@ -1,5 +1,8 @@
 'use strict';
 
+// Load .env.local for local development (gitignored; silently skipped in prod).
+require('dotenv').config({ path: require('path').join(__dirname, '.env.local') });
+
 const express            = require('express');
 const { MongoClient }    = require('mongodb');
 const { startConsumer, setDb } = require('./consumer');
