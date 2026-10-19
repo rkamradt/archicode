@@ -318,12 +318,58 @@ function extractImages(owner, repoName, files) {
   }));
 }
 
-// ── Main per-message handler ───────────────────────────────────────────────────
-async function handleCodeGenerated(event) {
-  const { buildId, userId, repoName, objectKey } = event;
-  log(`[${buildId}] Received code.generated repo=${repoName} user=${userId}`);
+// ── Artifact correlation ───────────────────────────────────────────────────────
+//
+// arch-code-gen and arch-test-gen publish their artifacts independently to
+// different topics. This map holds partially-received state per buildId so we
+// can proceed only once BOTH artifacts have arrived.
+//
+// Memory-only: acceptable for single-instance deployment. On restart, any
+// in-flight builds whose first artifact arrived before the restart will stall
+// until they time out on arch-code-gen/arch-test-gen's side (those services
+// publish build.failed if the agent errors, so the build will not hang forever).
+//
+// Shape: buildId → { userId?, repoName?, codeObjectKey?, testsObjectKey? }
 
-  // Step 1 — Create GitHub repo
+const pendingArtifacts = new Map();
+
+function getOrCreate(buildId) {
+  if (!pendingArtifacts.has(buildId)) {
+    pendingArtifacts.set(buildId, {});
+  }
+  return pendingArtifacts.get(buildId);
+}
+
+async function tryDispatch(buildId) {
+  const state = pendingArtifacts.get(buildId);
+  if (!state) return;
+  if (!state.codeObjectKey || !state.testsObjectKey) return;  // still waiting for the other artifact
+
+  pendingArtifacts.delete(buildId);
+  log(`[${buildId}] Both artifacts ready — code=${state.codeObjectKey} tests=${state.testsObjectKey}`);
+
+  try {
+    await handleBothArtifactsReady({
+      buildId,
+      userId:          state.userId,
+      repoName:        state.repoName,
+      codeObjectKey:   state.codeObjectKey,
+      testsObjectKey:  state.testsObjectKey,
+    });
+  } catch (err) {
+    log(`[${buildId}] Unhandled error in dispatch: ${err.message}`);
+    await publishFailed(buildId, state.userId, err.message);
+  }
+}
+
+// ── Merged handler ─────────────────────────────────────────────────────────────
+// Runs the full GitHub pipeline using the merged code + test artifact.
+// This replaces the old handleCodeGenerated() which worked from a single zip.
+
+async function handleBothArtifactsReady({ buildId, userId, repoName, codeObjectKey, testsObjectKey }) {
+  log(`[${buildId}] Starting GitHub pipeline repo=${repoName}`);
+
+  // Step 1 — GitHub credentials
   let creds;
   try {
     creds = await getGithubCreds(userId);
@@ -337,20 +383,31 @@ async function handleCodeGenerated(event) {
     return;
   }
 
-  // Step 2 — Fetch artifact from MinIO
+  // Step 2 — Fetch and merge both artifacts from MinIO
   let files;
   try {
-    files = await fetchArtifact(objectKey, buildId);
+    const [codeFiles, testFiles] = await Promise.all([
+      fetchArtifact(codeObjectKey, buildId),
+      fetchArtifact(testsObjectKey, buildId),
+    ]);
+    // Code files first; test files overlay (tests never conflict with source paths
+    // because they live in __tests__/ subdirectories)
+    const seen = new Set(codeFiles.map(f => f.path));
+    const merged = [...codeFiles];
+    for (const f of testFiles) {
+      if (!seen.has(f.path)) merged.push(f);
+    }
+    files = merged;
+    log(`[${buildId}] Merged ${codeFiles.length} code + ${testFiles.length} test files = ${files.length} total`);
   } catch (err) {
-    await publishFailed(buildId, userId, `Artifact fetch failed: ${err.message}`);
+    await publishFailed(buildId, userId, `Artifact fetch/merge failed: ${err.message}`);
     return;
   }
 
-  // Step 2b — Inject CI workflows for each detected service
+  // Steps 3–6 are unchanged from the single-artifact flow
   const injectedServices = injectWorkflows(files, creds.owner, repoName);
   log(`[${buildId}] Injected ${injectedServices.length} GitHub Actions workflow(s): ${injectedServices.join(', ')}`);
 
-  // Step 3 — Push files to GitHub
   let failures;
   try {
     failures = await pushFiles(creds, repoName, files, buildId);
@@ -358,8 +415,7 @@ async function handleCodeGenerated(event) {
     await publishFailed(buildId, userId, `File push failed: ${err.message}`);
     return;
   }
-  // Workflow files failing to push means the PAT lacks the `workflow` scope —
-  // there is no point proceeding since no pipeline will ever run.
+
   const workflowFailures = failures.filter(f => f.path.startsWith('.github/workflows/'));
   if (workflowFailures.length > 0) {
     const detail = workflowFailures.map(f => `${f.path}: ${f.error}`).join('; ');
@@ -379,8 +435,6 @@ async function handleCodeGenerated(event) {
     log(`[${buildId}] ${failures.length} non-fatal push failures — continuing`);
   }
 
-  // Step 3b — Trigger workflow_dispatch (GitHub won't auto-run a workflow on the
-  // push that first creates it)
   try {
     await triggerWorkflows(creds, repoName, injectedServices, buildId);
   } catch (err) {
@@ -388,7 +442,6 @@ async function handleCodeGenerated(event) {
     return;
   }
 
-  // Step 4 — Wait for GitHub Actions pipeline
   let pipelineResult;
   try {
     pipelineResult = await waitForPipeline(creds, repoName, buildId);
@@ -404,11 +457,9 @@ async function handleCodeGenerated(event) {
     return;
   }
 
-  // Step 5 — Extract image references (convention-based)
   const images = extractImages(creds.owner, repoName, files);
   log(`[${buildId}] Extracted ${images.length} image reference(s)`);
 
-  // Step 6 — Publish build.complete
   await producer.send({
     topic:    'architectai.build.complete',
     messages: [{
@@ -433,10 +484,13 @@ async function startConsumer() {
   log('Kafka producer connected');
 
   await consumer.connect();
-  await consumer.subscribe({ topic: 'architectai.code.generated', fromBeginning: false });
+  await consumer.subscribe({
+    topics:        ['architectai.code.generated', 'architectai.tests.generated'],
+    fromBeginning: false,
+  });
 
   await consumer.run({
-    eachMessage: async ({ message }) => {
+    eachMessage: async ({ topic, message }) => {
       let event;
       try {
         event = JSON.parse(message.value.toString());
@@ -445,17 +499,34 @@ async function startConsumer() {
         return;
       }
 
+      const { buildId, userId, repoName, objectKey } = event;
+      if (!buildId || !objectKey) {
+        log(`Skipping message missing buildId or objectKey`);
+        return;
+      }
+
       try {
-        await handleCodeGenerated(event);
+        const state = getOrCreate(buildId);
+        if (topic === 'architectai.code.generated') {
+          state.userId        = userId;
+          state.repoName      = repoName;
+          state.codeObjectKey = objectKey;
+          log(`[${buildId}] Received code.generated (${objectKey})`);
+        } else if (topic === 'architectai.tests.generated') {
+          state.userId         = state.userId  || userId;
+          state.repoName       = state.repoName || repoName;
+          state.testsObjectKey = objectKey;
+          log(`[${buildId}] Received tests.generated (${objectKey})`);
+        }
+        await tryDispatch(buildId);
       } catch (err) {
-        // Never let an unhandled error bubble up and kill the consumer loop
-        log(`[${event?.buildId ?? '?'}] Unhandled error in handler: ${err.message}`);
-        await publishFailed(event?.buildId, event?.userId, err.message);
+        log(`[${buildId ?? '?'}] Unhandled error routing message: ${err.message}`);
+        await publishFailed(buildId, userId, err.message);
       }
     },
   });
 
-  log('Consumer started — listening on architectai.code.generated');
+  log('Consumer started — listening on architectai.code.generated + architectai.tests.generated');
 }
 
 module.exports = { startConsumer, setDb };
