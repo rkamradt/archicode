@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - 'arch-code-gen/**'
+  workflow_dispatch:
 
 env:
   REGISTRY: ghcr.io

@@ -1,3 +1,4 @@
 architectai/
 architectai-api/
 .DS_Store
+node_modules/
